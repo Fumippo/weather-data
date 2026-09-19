@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>気象データ変換</title>
+
+<style>
+body {
+  font-family: system-ui, sans-serif;
+  max-width: 900px;
+  margin: 24px auto;
+  padding: 0 14px;
+}
+
+input, button, textarea {
+  font: inherit;
+}
+
+input {
+  padding: 8px;
+  margin: 4px 8px 12px 0;
+}
+
+button {
+  padding: 10px 16px;
+  margin: 4px 8px 8px 0;
+  cursor: pointer;
+}
+
+textarea {
+  width: 100%;
+  height: 420px;
+  box-sizing: border-box;
+  font-family: monospace;
+  white-space: pre;
+}
+
+#status {
+  margin: 12px 0;
+  font-weight: 700;
+  white-space: pre-wrap;
+}
+</style>
+</head>
+
+<body>
+
+<h1>気象データ変換</h1>
+
+<label>
+日付
+<input id="date" type="date">
+</label>
+
+<label>
+地点
+<input id="station" type="text" placeholder="大阪">
+</label>
+
+<div>
+  <button id="readClipboard">クリップボードから取り込む</button>
+  <button id="saveTxt">TXT保存</button>
+  <button id="saveTsv">TSV保存</button>
+</div>
+
+<div id="status">
+表をコピーして「クリップボードから取り込む」を押してください。
+</div>
+
+<textarea id="preview" placeholder="取り込んだデータがここに表示されます"></textarea>
+
+<script>
+const $ = id => document.getElementById(id);
+
+const dateBox = $("date");
+const stationBox = $("station");
+const preview = $("preview");
+const statusBox = $("status");
+
+const now = new Date();
+const yyyy = now.getFullYear();
+const mm = String(now.getMonth() + 1).padStart(2, "0");
+const dd = String(now.getDate()).padStart(2, "0");
+dateBox.value = `${yyyy}-${mm}-${dd}`;
+
+$("readClipboard").addEventListener("click", async () => {
+  try {
+    const text = await navigator.clipboard.readText();
+
+    if (!text.trim()) {
+      throw new Error("クリップボードが空です。");
+    }
+
+    preview.value = text;
+    showStatus("クリップボードから取り込みました。");
+  } catch (error) {
+    showStatus(
+      "クリップボードを読み取れませんでした。\n" +
+      "GitHub PagesなどHTTPS上で開き、ブラウザの許可を与えてください。\n\n" +
+      error.message
+    );
+  }
+});
+
+$("saveTxt").addEventListener("click", () => {
+  try {
+    const { date, station, raw } = getInput();
+
+    const filename =
+      `${date}_${safeFileName(station)}.txt`;
+
+    download(
+      filename,
+      normalizeNewlines(raw),
+      "text/plain;charset=utf-8"
+    );
+
+    showStatus(`TXT保存：${filename}`);
+  } catch (error) {
+    showStatus(error.message);
+  }
+});
+
+$("saveTsv").addEventListener("click", () => {
+  try {
+    const { date, station, raw } = getInput();
+    const rows = parseWeather(raw);
+
+    if (rows.length === 0) {
+      throw new Error("観測行を認識できませんでした。");
+    }
+
+    const header = [
+      "date",
+      "station",
+      "time",
+      "pressure_local_hpa",
+      "pressure_sea_hpa",
+      "precip_mm",
+      "temperature_c",
+      "humidity_pct",
+      "wind_speed_ms",
+      "wind_direction",
+      "gust_speed_ms",
+      "gust_direction",
+      "sunshine_min"
+    ];
+
+    const output = [
+      header.join("\t"),
+      ...rows.map(row =>
+        [date, station, ...row].join("\t")
+      )
+    ].join("\n") + "\n";
+
+    const filename =
+      `${date}_${safeFileName(station)}.tsv`;
+
+    download(
+      filename,
+      output,
+      "text/tab-separated-values;charset=utf-8"
+    );
+
+    showStatus(
+      `TSV保存：${filename}\n${rows.length}行`
+    );
+  } catch (error) {
+    showStatus(error.message);
+  }
+});
+
+function getInput() {
+  const date = dateBox.value.trim();
+  const station = stationBox.value.trim();
+  const raw = preview.value;
+
+  if (!date) {
+    throw new Error("日付を入力してください。");
+  }
+
+  if (!station) {
+    throw new Error("地点を入力してください。");
+  }
+
+  if (!raw.trim()) {
+    throw new Error("データがありません。");
+  }
+
+  return { date, station, raw };
+}
+
+function parseWeather(text) {
+  const rows = [];
+  const lines = normalizeNewlines(text).split("\n");
+
+  const timePattern =
+    /^(?:[01]\d|2[0-3]):[0-5]\d$|^24:00$/;
+
+  for (const originalLine of lines) {
+    const line = originalLine.trim();
+
+    if (!line) {
+      continue;
+    }
+
+    const parts = line.split(/\s+/);
+
+    if (!timePattern.test(parts[0])) {
+      continue;
+    }
+
+    if (parts.length === 10) {
+      parts.push("");
+    }
+
+    if (parts.length !== 11) {
+      throw new Error(
+        "列数を認識できない行があります。\n\n" +
+        originalLine +
+        "\n\n認識列数：" +
+        parts.length
+      );
+    }
+
+    rows.push(parts);
+  }
+
+  return rows;
+}
+
+function normalizeNewlines(text) {
+  return text
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n");
+}
+
+function safeFileName(text) {
+  return text
+    .replace(/[\\/:*?"<>|]/g, "_")
+    .replace(/\s+/g, "_");
+}
+
+function download(filename, text, type) {
+  const blob = new Blob(
+    ["\uFEFF", text],
+    { type }
+  );
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+
+  a.href = url;
+  a.download = filename;
+
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+
+  URL.revokeObjectURL(url);
+}
+
+function showStatus(message) {
+  statusBox.textContent = message;
+}
+</script>
+
+</body>
+</html>
