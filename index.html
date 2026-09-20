@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Weather Forecast Lab v7</title>
+<title>Weather Forecast Lab v8</title>
 <style>
 :root{
   --bg:#0b1020;
@@ -138,15 +138,15 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
 <div class="wrap">
   <div class="hero">
     <div>
-      <h1>Weather Forecast Lab <span style="font-size:.38em;color:var(--muted)">v7</span></h1>
-      <p>10分値をTSV化し、現在気温からの変化量 ΔT を学習して多時間先を予測するブラウザ完結型ダッシュボード</p>
+      <h1>Weather Forecast Lab <span style="font-size:.38em;color:var(--muted)">v8</span></h1>
+      <p>10分値を主軸に、1時間補助観測を時間リークなしで結合し、ΔTモデルを比較検証するブラウザ完結型ダッシュボード</p>
     </div>
-    <div class="badge">v6 / 全観測項目 + 10分刻み144モデル + ΔT補正</div>
+    <div class="badge">v8 / 時間意味論 + 1時間補助観測 + A/B実験 + 144モデル</div>
   </div>
 
   <div class="grid">
     <section class="panel">
-      <h2>今日の生データ</h2>
+      <h2>今日の10分値</h2>
       <div class="row">
         <div><label>日付</label><input id="date" type="date"></div>
         <div><label>地点</label><input id="station" type="text" placeholder="大阪"></div>
@@ -158,15 +158,52 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
         <button id="selectAll">全選択</button>
         <button id="clearRaw" class="danger">貼り付け欄を全カット</button>
         <button id="convert">TSV化</button>
-        <button id="downloadCurrent">今日のTSV保存</button>
+        <button id="downloadCurrent">今日の10分TSV保存</button>
       </div>
       <div id="convertStatus" class="status">まだTSV化していません。</div>
     </section>
 
     <section class="panel">
-      <h2>過去TSV</h2>
+      <h2>今日の1時間補助観測</h2>
+      <div class="small">
+        気象庁の「1時間ごとの値」を表ごと貼り付けます。原データは全列正規化して保存し、
+        気温モデルへは当面 <b>全天日射量・雲量</b>だけを実験投入します。
+      </div>
+      <label style="margin-top:8px">気象1時間値</label>
+      <textarea id="hourlyRaw" placeholder="大阪（大阪府） 2026年7月17日（1時間ごとの値）&#10;...表をそのまま貼り付け"></textarea>
+
+      <div class="row" style="margin-top:8px">
+        <div>
+          <label>1時間値 available 遅延（分）</label>
+          <input id="hourlyAvailabilityLag" type="number" min="0" step="1" value="0">
+        </div>
+        <div>
+          <label>availability方針</label>
+          <select id="hourlyAvailabilityVerified">
+            <option value="0" selected>未確認（入力値を仮定として使用）</option>
+            <option value="1">確認済み</option>
+          </select>
+        </div>
+      </div>
+      <div class="small">
+        0分はv7互換の仮定です。実際の公開遅延が分かったら変更してください。
+        <code>fetched_at</code> は取得来歴であり、<code>available_at</code> の代用にはしません。
+      </div>
+
+      <div class="actions">
+        <button id="hourlyClipboard">クリップボードから取込</button>
+        <button id="hourlyClearRaw" class="danger">1時間欄をクリア</button>
+        <button id="hourlyConvert">1時間値を正規化</button>
+        <button id="hourlyDownloadRaw">raw保存</button>
+        <button id="hourlyDownloadCurrent">正規化TSV保存</button>
+      </div>
+      <div id="hourlyConvertStatus" class="status">1時間値は未変換です。</div>
+    </section>
+
+    <section class="panel">
+      <h2>過去10分TSV</h2>
       <div id="drop" class="drop">
-        ここへTSVをまとめてドロップ<br>
+        ここへ10分TSVをまとめてドロップ<br>
         <span class="small">または下から複数選択</span>
       </div>
       <input id="historyFiles" type="file" accept=".tsv,.txt" multiple style="margin-top:10px">
@@ -205,6 +242,24 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
       </select>
     </section>
 
+    <section class="panel">
+      <h2>過去1時間補助TSV</h2>
+      <div id="hourlyDrop" class="drop">
+        ここへ1時間補助TSVをまとめてドロップ<br>
+        <span class="small">正規化済み <code>*_1h.tsv</code> を推奨</span>
+      </div>
+      <input id="hourlyHistoryFiles" type="file" accept=".tsv,.txt" multiple style="margin-top:10px">
+      <div class="actions">
+        <button id="hourlyClearFiles" class="danger">1時間TSVを全解除</button>
+        <button id="downloadHourlyMerged" class="ghost">1時間統合TSVを保存</button>
+      </div>
+      <div id="hourlyFileList" class="file-list"></div>
+      <div class="small">
+        raw → normalized → features の3層を分離します。1時間TSVの有無で現行51特徴量モデルの計算結果は変えません。
+      </div>
+    </section>
+
+
     <section class="panel full">
       <h2>データ状況</h2>
       <div class="kpis">
@@ -214,6 +269,8 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
         <div class="kpi"><div class="label">最新観測</div><div id="latestKpi" class="value" style="font-size:1rem">-</div></div>
         <div class="kpi"><div class="label">最新気温</div><div id="latestTempKpi" class="value">-</div></div>
         <div class="kpi"><div class="label">地点</div><div id="stationKpi" class="value" style="font-size:1rem">-</div></div>
+        <div class="kpi"><div class="label">1時間補助行</div><div id="hourlyRowsKpi" class="value">0</div></div>
+        <div class="kpi"><div class="label">1時間補助日数</div><div id="hourlyDaysKpi" class="value">0日</div></div>
       </div>
     </section>
 
@@ -235,6 +292,27 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
           </thead>
           <tbody id="diagnosticBody"></tbody>
         </table>
+      </div>
+    </section>
+
+    <section class="panel full">
+      <h2>1時間補助データ診断</h2>
+      <div id="hourlyDiagnosticSummary" class="status">1時間補助データは未統合です。</div>
+      <div class="table-wrap" style="margin-top:10px;max-height:340px">
+        <table>
+          <thead>
+            <tr>
+              <th>ファイル</th><th>行数</th><th>期間</th><th>日射</th><th>雲量数値</th>
+              <th>天気</th><th>視程</th><th>parser</th><th>判定</th>
+            </tr>
+          </thead>
+          <tbody id="hourlyDiagnosticBody"></tbody>
+        </table>
+      </div>
+      <div class="small" style="margin-top:8px">
+        安全結合条件：補助変数の <code>valid_to ≤ forecast_origin</code> かつ
+        <code>available_at ≤ forecast_origin</code>。日射は「終了時刻までの1時間積算」、
+        雲量は「その時刻付近の状態」として別の時間意味論を持たせます。
       </div>
     </section>
 
@@ -326,6 +404,60 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
     </section>
 
     <section class="panel full">
+      <h2>1時間補助特徴量 A/B 実験</h2>
+      <div class="small">
+        本番144モデルは現行51特徴量のまま固定します。ここでは代表8 horizonだけで、
+        <b>B0=51特徴量 / B1=+日射 / B2=+雲量 / B3=+日射+雲量</b>を同一学習期間・同一テストで比較します。
+        補助特徴量の欠損補完平均・標準偏差は必ず学習側だけから計算します。<br>
+        <b>注意：</b>この結果を見ながら特徴量を調整した期間は「開発データ」です。
+        v8仕様を固定した後に新しく追加される日を、触っていないprospective holdoutとして扱ってください。
+      </div>
+      <div class="actions">
+        <button id="runAuxAblation" class="primary">代表8時間 A/B実験</button>
+        <button id="runAuxWalkForward" class="ghost">00/06/12/18 walk-forward（B0 vs B3）</button>
+      </div>
+      <div id="auxExperimentStatus" class="status">未実行です。1時間補助データがなくてもB0再現確認はできます。</div>
+
+      <h3>固定時系列holdout：特徴群アブレーション</h3>
+      <div class="table-wrap" style="max-height:430px">
+        <table>
+          <thead>
+            <tr>
+              <th>予測先</th><th>モデル</th><th>特徴数</th><th>AI MAE</th>
+              <th>B0との差</th><th>B0比改善率</th><th>学習数</th><th>テスト数</th>
+            </tr>
+          </thead>
+          <tbody id="auxAblationBody"><tr><td colspan="8">未実行</td></tr></tbody>
+        </table>
+      </div>
+
+      <h3>4起点walk-forward：B0 vs B3</h3>
+      <div class="small">
+        各日 00:00 / 06:00 / 12:00 / 18:00 を独立起点として評価します。
+        「予測件数」だけでなく、日別平均でB3がB0に勝った日数も表示します。
+      </div>
+      <div class="table-wrap" style="max-height:430px">
+        <table>
+          <thead>
+            <tr>
+              <th>予測先</th><th>ケース数</th><th>日数</th><th>B0 MAE</th><th>B3 MAE</th>
+              <th>改善率</th><th>B3バイアス</th><th>B3勝率</th><th>日勝率</th>
+            </tr>
+          </thead>
+          <tbody id="auxWalkForwardBody"><tr><td colspan="9">未実行</td></tr></tbody>
+        </table>
+      </div>
+
+      <h3>起点時刻別（B3 − B0）</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>予測先</th><th>00時</th><th>06時</th><th>12時</th><th>18時</th></tr></thead>
+          <tbody id="auxOriginBody"><tr><td colspan="5">未実行</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel full">
       <h2>時間別の精度</h2>
       <div class="table-wrap">
         <table>
@@ -379,7 +511,9 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
           予測対象期間が学習側へ食い込まないよう、予測時間ぶんの境界を空けています。<br><br>
           <b>日別walk-forward：</b>別ボタンで実行します。各日00:00時点までに判明している情報だけで再学習し、
           その日の未来を予測します。「1日＝1ケース」で集計するため、通常の10分刻みテストより独立性の高い補助評価になります。<br><br>
-          <b>実際の未来予測：</b>全利用可能データで再学習します。<br><br>
+          <b>実際の未来予測：</b>全利用可能データで再学習します。v8では本番144モデルの51特徴量経路をv7から変更しません。<br><br>
+          <b>1時間補助観測：</b>raw → normalized → features を分離し、各値の時間意味論と availability を管理します。
+          補助情報はまず代表8 horizonの実験モデルだけへ投入し、本番へ自動昇格させません。<br><br>
           <b>採用予報：</b>各予測時間について、過去検証MAEが小さい方を暫定採用します。
           AIが単純予報に負けていれば現在気温固定、勝っていればAI予報を採用します。
         </div>
@@ -395,7 +529,10 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
         降水量は現在値に加えて30分/1時間/3時間累積と降り始め・雨上がり、
         風向は16方位を東西/南北ベクトルへ変換、最大瞬間風は突風増幅量と1時間/3時間最大値、
         日照は30分/1時間/3時間累積、気温・気圧・湿度・風速は複数時間差を使用します。<br><br>
-        <b>特徴量数：</b><span id="featureCountText"></span>
+        <b>本番特徴量数：</b><span id="featureCountText"></span><br><br>
+        <b>v8実験候補：</b>全天日射量（最新・age・3時間累積・availability）、
+        雲量（最新・age・availability）。露点・蒸気圧・視程・天気はnormalized層へ保存しますが、
+        初期A/Bではまだ投入しません。
       </div>
     </section>
   </div>
@@ -503,6 +640,56 @@ const FEATURE_NAMES = [
   "季節cos"
 ];
 
+
+const PARSER_VERSION = "8.0.0";
+
+// 1時間値のうち、v8初期A/Bで使う特徴群。
+// raw/normalized層では露点・蒸気圧・視程・天気等も保持する。
+const AUX_VARIANTS = [
+  {id:"B0",label:"B0 51特徴量",groups:[]},
+  {id:"B1",label:"B1 +日射",groups:["solar"]},
+  {id:"B2",label:"B2 +雲量",groups:["cloud"]},
+  {id:"B3",label:"B3 +日射+雲量",groups:["solar","cloud"]}
+];
+
+const AUX_FEATURE_NAMES = {
+  solar:[
+    "補助:最新1時間全天日射量",
+    "補助:日射観測age分",
+    "補助:直近3時間全天日射量",
+    "補助:日射利用可能フラグ"
+  ],
+  cloud:[
+    "補助:最新雲量",
+    "補助:雲量観測age分",
+    "補助:雲量利用可能フラグ"
+  ]
+};
+
+// 変数ごとの時間意味論。
+// 「行が12:00だから全部12:00瞬間値」にはしない。
+const HOURLY_TEMPORAL_SCHEMA = {
+  temperature:{kind:"instantaneous"},
+  humidity:{kind:"instantaneous"},
+  pressureLocal:{kind:"instantaneous"},
+  pressure:{kind:"instantaneous"},
+  dewpoint:{kind:"instantaneous"},
+  vaporPressure:{kind:"instantaneous"},
+  wind:{kind:"instantaneous"},
+  windDirection:{kind:"instantaneous"},
+  cloudRaw:{kind:"instantaneous"},
+  visibility:{kind:"instantaneous"},
+  weather:{kind:"instantaneous"},
+  precip:{kind:"accumulated",minutes:60},
+  sunshineHour:{kind:"accumulated",minutes:60},
+  solar:{kind:"accumulated",minutes:60},
+  snowfall:{kind:"accumulated",minutes:60},
+  snowDepth:{kind:"instantaneous"}
+};
+
+const SOLAR_MAX_AGE_MIN = 90;
+const CLOUD_MAX_AGE_MIN = 180;
+
 let stagedFiles = [];
 let currentRows = [];
 let currentTsv = "";
@@ -515,15 +702,41 @@ let stationContextCache = null;
 let latestFeatureCache = null;
 let walkForwardResults = new Map();
 
+// v8: 1時間補助観測は10分値とは別レイヤー
+let stagedHourlyFiles = [];
+let currentHourlyRows = [];
+let currentHourlyTsv = "";
+let globalHourlyRows = [];
+let hourlyDiagnostics = [];
+let hourlyContextCache = new Map();
+let auxAblationResults = [];
+let auxWalkForwardResults = [];
+
+
 setToday();
 if($("featureCountText")) $("featureCountText").textContent=`${FEATURE_NAMES.length}個`;
 
-["date","station","raw"].forEach(id => {
+["date","station"].forEach(id => {
   $(id).addEventListener("input", () => {
     currentRows = [];
     currentTsv = "";
-    $("convertStatus").textContent = "入力が変更されました。再変換が必要です。";
+    currentHourlyRows = [];
+    currentHourlyTsv = "";
+    $("convertStatus").textContent = "日付/地点が変更されました。10分値は再変換が必要です。";
+    $("hourlyConvertStatus").textContent = "日付/地点が変更されました。1時間値は再変換が必要です。";
   });
+});
+
+$("raw").addEventListener("input", () => {
+  currentRows = [];
+  currentTsv = "";
+  $("convertStatus").textContent = "入力が変更されました。再変換が必要です。";
+});
+
+$("hourlyRaw").addEventListener("input", () => {
+  currentHourlyRows = [];
+  currentHourlyTsv = "";
+  $("hourlyConvertStatus").textContent = "1時間入力が変更されました。再変換が必要です。";
 });
 
 $("historyFiles").addEventListener("change", e => {
@@ -599,6 +812,106 @@ $("downloadCurrent").addEventListener("click", () => {
   }
 });
 
+
+$("hourlyHistoryFiles").addEventListener("change", e => {
+  stagedHourlyFiles = uniqueFiles([...stagedHourlyFiles, ...e.target.files]);
+  renderHourlyFileList();
+});
+
+$("hourlyDrop").addEventListener("dragover", e => {
+  e.preventDefault(); $("hourlyDrop").classList.add("drag");
+});
+$("hourlyDrop").addEventListener("dragleave", () => $("hourlyDrop").classList.remove("drag"));
+$("hourlyDrop").addEventListener("drop", e => {
+  e.preventDefault(); $("hourlyDrop").classList.remove("drag");
+  const files=[...e.dataTransfer.files].filter(f=>/\.(tsv|txt)$/i.test(f.name));
+  stagedHourlyFiles=uniqueFiles([...stagedHourlyFiles,...files]);
+  renderHourlyFileList();
+});
+
+$("hourlyClearFiles").addEventListener("click", () => {
+  stagedHourlyFiles=[];
+  $("hourlyHistoryFiles").value="";
+  renderHourlyFileList();
+});
+
+$("hourlyClearRaw").addEventListener("click", () => {
+  $("hourlyRaw").value="";
+  currentHourlyRows=[];
+  currentHourlyTsv="";
+  $("hourlyConvertStatus").textContent="1時間貼り付け欄を空にしました。";
+});
+
+$("hourlyClipboard").addEventListener("click", async () => {
+  try{
+    const t=await navigator.clipboard.readText();
+    if(!t.trim()) throw new Error("クリップボードが空です。");
+    $("hourlyRaw").value=t;
+    currentHourlyRows=[];
+    currentHourlyTsv="";
+    $("hourlyConvertStatus").textContent="クリップボードから1時間値を取り込みました。";
+  }catch(e){
+    $("hourlyConvertStatus").textContent="クリップボードを読み取れません。\n"+e.message;
+  }
+});
+
+$("hourlyConvert").addEventListener("click", () => {
+  try{
+    const p=convertCurrentHourlyRaw();
+    $("hourlyConvertStatus").textContent=
+      `1時間値の正規化完了：${p.rows.length}行\n`+
+      `parser ${PARSER_VERSION} / availability lag ${getHourlyAvailabilityLag()}分`;
+  }catch(e){
+    $("hourlyConvertStatus").textContent="エラー\n"+e.message;
+  }
+});
+
+$("hourlyDownloadRaw").addEventListener("click", () => {
+  try{
+    const raw=$("hourlyRaw").value;
+    if(!raw.trim()) throw new Error("1時間rawが空です。");
+    const date=$("date").value.trim();
+    const station=$("station").value.trim();
+    download(
+      `${date}_${safeFileName(station)}_1h_raw.txt`,
+      raw,
+      "text/plain;charset=utf-8"
+    );
+  }catch(e){
+    $("hourlyConvertStatus").textContent="エラー\n"+e.message;
+  }
+});
+
+$("hourlyDownloadCurrent").addEventListener("click", () => {
+  try{
+    const p=convertCurrentHourlyRaw();
+    const date=$("date").value.trim();
+    const station=$("station").value.trim();
+    download(
+      `${date}_${safeFileName(station)}_1h.tsv`,
+      p.tsv,
+      "text/tab-separated-values;charset=utf-8"
+    );
+    $("hourlyConvertStatus").textContent=
+      `正規化して保存しました。\n${date}_${safeFileName(station)}_1h.tsv`;
+  }catch(e){
+    $("hourlyConvertStatus").textContent="エラー\n"+e.message;
+  }
+});
+
+$("downloadHourlyMerged").addEventListener("click", () => {
+  try{
+    if(!globalHourlyRows.length) throw new Error("1時間補助データがありません。");
+    download(
+      "weather_hourly_merged_normalized.tsv",
+      hourlyRowsToTsv(globalHourlyRows),
+      "text/tab-separated-values;charset=utf-8"
+    );
+  }catch(e){
+    $("hourlyDiagnosticSummary").textContent="エラー\n"+e.message;
+  }
+});
+
 $("downloadMerged").addEventListener("click", () => {
   try{
     if(!globalRows.length){
@@ -646,6 +959,8 @@ $("downloadMerged").addEventListener("click", () => {
 
 $("run").addEventListener("click", runAll);
 $("walkForwardBtn").addEventListener("click", runWalkForward);
+$("runAuxAblation").addEventListener("click", runAuxAblation);
+$("runAuxWalkForward").addEventListener("click", runAuxWalkForward);
 $("walkForwardHorizon").addEventListener("change", renderWalkForwardDetail);
 $("backtestHorizon").addEventListener("change", renderSelectedBacktest);
 $("explainHorizon").addEventListener("change", renderExplanation);
@@ -668,12 +983,559 @@ function renderFileList(){
     : `<div class="small">未選択</div>`;
 }
 
+
+function renderHourlyFileList(){
+  $("hourlyFileList").innerHTML = stagedHourlyFiles.length
+    ? stagedHourlyFiles.map(f=>`<div class="file-item"><span>${escapeHtml(f.name)}</span><span>${formatBytes(f.size)}</span></div>`).join("")
+    : `<div class="small">未選択</div>`;
+}
+
+function getHourlyAvailabilityLag(){
+  const n=Number($("hourlyAvailabilityLag")?.value ?? 0);
+  return Number.isFinite(n) && n>=0 ? n : 0;
+}
+
+function getHourlyAvailabilityVerified(){
+  return $("hourlyAvailabilityVerified")?.value==="1";
+}
+
+function parseIsoMs(v){
+  if(!v) return NaN;
+  const n=Date.parse(v);
+  return Number.isFinite(n) ? n : NaN;
+}
+
+function isoOrBlank(ms){
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : "";
+}
+
+function parseCloudNumeric(raw){
+  const s=String(raw??"").trim();
+  if(!s) return {value:NaN,parseOk:0,code:""};
+  if(/^(?:\d+(?:\.\d+)?)$/.test(s)){
+    const n=Number(s);
+    if(Number.isFinite(n) && n>=0 && n<=10){
+      return {value:n,parseOk:1,code:s};
+    }
+  }
+  // "10-" 等を勝手に数値化しない。raw/codeは保持する。
+  return {value:NaN,parseOk:0,code:s};
+}
+
+function hourlyTimeFromHourToken(token){
+  const n=Number(String(token).trim());
+  if(!Number.isInteger(n) || n<1 || n>24) return null;
+  return n===24 ? "24:00" : `${String(n).padStart(2,"0")}:00`;
+}
+
+function parseHourlyRawLine(original){
+  const line=String(original??"").replace(/\r/g,"");
+  if(!line.trim()) return null;
+
+  let f;
+
+  if(line.includes("\t")){
+    f=line.split("\t").map(v=>v.trim());
+    // コピー元によって末尾空欄が落ちるため17列まで補う。
+    while(f.length<17) f.push("");
+    if(f.length>17) f=f.slice(0,17);
+  }else{
+    const t=line.trim().split(/\s+/);
+    if(!/^(?:[1-9]|1\d|2[0-4])$/.test(t[0]||"")) return null;
+    if(t.length<10) return null;
+
+    const head=t.slice(0,10);
+    const rem=t.slice(10);
+    const x1=rem.indexOf("×");
+    const x2=x1>=0 ? rem.indexOf("×",x1+1) : -1;
+
+    let sunshine="",solar="",snowfall="",snowDepth="",weather="",cloud="",visibility="";
+
+    if(x1>=0 && x2>x1){
+      const before=rem.slice(0,x1);
+      sunshine=before[0]??"";
+      solar=before[1]??"";
+      snowfall=rem[x1]??"";
+      snowDepth=rem[x2]??"";
+
+      const after=rem.slice(x2+1);
+      weather=after[0]??"";
+      cloud=after[1]??"";
+      visibility=after[2]??"";
+    }else if(rem.length>=7){
+      [sunshine,solar,snowfall,snowDepth,weather,cloud,visibility]=rem.slice(0,7);
+    }else{
+      // 空欄位置を復元できないので、曖昧な空白区切り行は拒否する。
+      return null;
+    }
+
+    f=[...head,sunshine,solar,snowfall,snowDepth,weather,cloud,visibility];
+  }
+
+  const time=hourlyTimeFromHourToken(f[0]);
+  if(!time) return null;
+
+  return {
+    time,
+    pressureLocalRaw:f[1]??"",
+    pressureRaw:f[2]??"",
+    precipRaw:f[3]??"",
+    temperatureRaw:f[4]??"",
+    dewpointRaw:f[5]??"",
+    vaporPressureRaw:f[6]??"",
+    humidityRaw:f[7]??"",
+    windRaw:f[8]??"",
+    windDirectionRaw:f[9]??"",
+    sunshineHourRaw:f[10]??"",
+    solarRaw:f[11]??"",
+    snowfallRaw:f[12]??"",
+    snowDepthRaw:f[13]??"",
+    weatherRaw:f[14]??"",
+    cloudRaw:f[15]??"",
+    visibilityRaw:f[16]??""
+  };
+}
+
+function hourlyRawRecordToObject(date,station,r,ingestedAtIso){
+  const ts=parseDateTime(date,r.time);
+  if(!Number.isFinite(ts)) return null;
+
+  const lag=getHourlyAvailabilityLag();
+  const cloud=parseCloudNumeric(r.cloudRaw);
+
+  const obj={
+    date,
+    station,
+    time:r.time,
+    ts,
+    nominalAt:ts,
+
+    // 状態量は名目観測時刻の状態
+    stateValidAt:ts,
+
+    // 全天日射・日照・降水等は直前1時間の積算として保持
+    solarValidFrom:ts-60*60*1000,
+    solarValidTo:ts,
+
+    availableAt:ts+lag*60*1000,
+    availabilityLagMin:lag,
+    availabilityVerified:getHourlyAvailabilityVerified()?1:0,
+
+    source:"JMA_1H_PASTE",
+    parserVersion:PARSER_VERSION,
+    ingestedAt:parseIsoMs(ingestedAtIso),
+
+    pressureLocal:toNumber(r.pressureLocalRaw),
+    pressure:toNumber(r.pressureRaw),
+    precip:toPrecipNumber(r.precipRaw),
+    precipRaw:r.precipRaw,
+
+    temperature:toNumber(r.temperatureRaw),
+    dewpoint:toNumber(r.dewpointRaw),
+    vaporPressure:toNumber(r.vaporPressureRaw),
+    humidity:toNumber(r.humidityRaw),
+
+    wind:toNumber(r.windRaw),
+    windDirection:r.windDirectionRaw,
+
+    sunshineHour:toNumber(r.sunshineHourRaw),
+    sunshineHourRaw:r.sunshineHourRaw,
+
+    solar:toNumber(r.solarRaw),
+    solarRaw:r.solarRaw,
+
+    snowfall:toNumber(r.snowfallRaw),
+    snowfallRaw:r.snowfallRaw,
+    snowDepth:toNumber(r.snowDepthRaw),
+    snowDepthRaw:r.snowDepthRaw,
+
+    weatherRaw:r.weatherRaw,
+    cloudRaw:r.cloudRaw,
+    cloudNumeric:cloud.value,
+    cloudParseOk:cloud.parseOk,
+    cloudCode:cloud.code,
+
+    visibility:toNumber(r.visibilityRaw),
+    visibilityRaw:r.visibilityRaw
+  };
+
+  return obj;
+}
+
+function hourlyHeader(){
+  return [
+    "date","station","time",
+    "nominal_at_iso","state_valid_at_iso",
+    "solar_valid_from_iso","solar_valid_to_iso",
+    "available_at_iso","availability_lag_min","availability_verified",
+    "source","parser_version","ingested_at_iso",
+    "pressure_local_hpa","pressure_sea_hpa",
+    "precip_mm","precip_raw",
+    "temperature_c","dewpoint_c","vapor_pressure_hpa","humidity_pct",
+    "wind_speed_ms","wind_direction",
+    "sunshine_hour","sunshine_hour_raw",
+    "solar_mj_m2","solar_raw",
+    "snowfall_cm","snowfall_raw","snow_depth_cm","snow_depth_raw",
+    "weather_raw","cloud_amount_raw","cloud_amount_numeric","cloud_parse_ok",
+    "visibility_km","visibility_raw"
+  ];
+}
+
+function valueOrBlank(v){
+  return Number.isFinite(v) ? String(v) : "";
+}
+
+function hourlyRowsToTsv(rows){
+  const lines=[hourlyHeader().join("\t")];
+
+  for(const r of rows){
+    lines.push([
+      r.date,r.station,r.time,
+      isoOrBlank(r.nominalAt),isoOrBlank(r.stateValidAt),
+      isoOrBlank(r.solarValidFrom),isoOrBlank(r.solarValidTo),
+      isoOrBlank(r.availableAt),r.availabilityLagMin ?? "",
+      r.availabilityVerified ?? 0,
+      r.source ?? "",r.parserVersion ?? "",isoOrBlank(r.ingestedAt),
+      valueOrBlank(r.pressureLocal),valueOrBlank(r.pressure),
+      valueOrBlank(r.precip),r.precipRaw ?? "",
+      valueOrBlank(r.temperature),valueOrBlank(r.dewpoint),
+      valueOrBlank(r.vaporPressure),valueOrBlank(r.humidity),
+      valueOrBlank(r.wind),r.windDirection ?? "",
+      valueOrBlank(r.sunshineHour),r.sunshineHourRaw ?? "",
+      valueOrBlank(r.solar),r.solarRaw ?? "",
+      valueOrBlank(r.snowfall),r.snowfallRaw ?? "",
+      valueOrBlank(r.snowDepth),r.snowDepthRaw ?? "",
+      r.weatherRaw ?? "",r.cloudRaw ?? "",
+      valueOrBlank(r.cloudNumeric),r.cloudParseOk ?? 0,
+      valueOrBlank(r.visibility),r.visibilityRaw ?? ""
+    ].join("\t"));
+  }
+
+  return lines.join("\n")+"\n";
+}
+
+function convertCurrentHourlyRaw(){
+  const date=$("date").value.trim();
+  const station=$("station").value.trim();
+  const raw=$("hourlyRaw").value;
+
+  if(!date) throw new Error("日付を入力してください。");
+  if(!station) throw new Error("地点を入力してください。");
+  if(!raw.trim()) throw new Error("1時間の生データを貼り付けてください。");
+
+  const parsed=[];
+  const rejected=[];
+  const ingestedAtIso=new Date().toISOString();
+
+  for(const line of normalizeNewlines(raw).split("\n")){
+    if(!/^\s*(?:[1-9]|1\d|2[0-4])(?:\s|\t)/.test(line)) continue;
+    const r=parseHourlyRawLine(line);
+
+    if(!r){
+      rejected.push(line);
+      continue;
+    }
+
+    const obj=hourlyRawRecordToObject(date,station,r,ingestedAtIso);
+    if(obj) parsed.push(obj);
+  }
+
+  if(!parsed.length){
+    throw new Error(
+      "1時間観測行を認識できません。表をタブ区切りのまま貼り付けるのが最も安全です。"+
+      (rejected.length?`\n認識できなかった行例: ${rejected[0]}`:"")
+    );
+  }
+
+  currentHourlyRows=deduplicateHourlyRows(parsed).sort((a,b)=>a.ts-b.ts);
+  currentHourlyTsv=hourlyRowsToTsv(currentHourlyRows);
+
+  return {rows:currentHourlyRows,tsv:currentHourlyTsv,rejected};
+}
+
+function parseHourlyTsvRows(text,sourceName=""){
+  const lines=normalizeNewlines(text).split("\n").filter(x=>x.trim()!=="");
+  if(lines.length<2) return [];
+
+  const header=lines[0].replace(/^\uFEFF/,"").split("\t");
+  const required=[
+    "date","station","time",
+    "available_at_iso","parser_version",
+    "solar_mj_m2","cloud_amount_raw","cloud_amount_numeric"
+  ];
+
+  for(const n of required){
+    if(!header.includes(n)){
+      throw new Error(`1時間TSVに必要な列がありません: ${n} (${sourceName})`);
+    }
+  }
+
+  const idx=Object.fromEntries(header.map((n,i)=>[n,i]));
+  const get=(v,n)=>idx[n]==null?"":(v[idx[n]]??"");
+  const out=[];
+
+  for(const line of lines.slice(1)){
+    const v=line.split("\t");
+    const date=get(v,"date");
+    const time=get(v,"time");
+    const ts=parseDateTime(date,time);
+    if(!Number.isFinite(ts)) continue;
+
+    const lag=toNumber(get(v,"availability_lag_min"));
+    const savedAvailable=parseIsoMs(get(v,"available_at_iso"));
+    const cloudNumeric=toNumber(get(v,"cloud_amount_numeric"));
+
+    const row={
+      date,
+      station:get(v,"station"),
+      time,
+      ts,
+      nominalAt:Number.isFinite(parseIsoMs(get(v,"nominal_at_iso"))) ? parseIsoMs(get(v,"nominal_at_iso")) : ts,
+      stateValidAt:Number.isFinite(parseIsoMs(get(v,"state_valid_at_iso"))) ? parseIsoMs(get(v,"state_valid_at_iso")) : ts,
+      solarValidFrom:Number.isFinite(parseIsoMs(get(v,"solar_valid_from_iso"))) ? parseIsoMs(get(v,"solar_valid_from_iso")) : ts-3600000,
+      solarValidTo:Number.isFinite(parseIsoMs(get(v,"solar_valid_to_iso"))) ? parseIsoMs(get(v,"solar_valid_to_iso")) : ts,
+      availableAt:Number.isFinite(savedAvailable) ? savedAvailable : ts+(Number.isFinite(lag)?lag:0)*60000,
+      availabilityLagMin:Number.isFinite(lag)?lag:0,
+      availabilityVerified:Number(get(v,"availability_verified"))===1?1:0,
+      source:get(v,"source")||sourceName,
+      sourceName,
+      parserVersion:get(v,"parser_version")||"",
+      ingestedAt:parseIsoMs(get(v,"ingested_at_iso")),
+
+      pressureLocal:toNumber(get(v,"pressure_local_hpa")),
+      pressure:toNumber(get(v,"pressure_sea_hpa")),
+      precip:toNumber(get(v,"precip_mm")),
+      precipRaw:get(v,"precip_raw"),
+      temperature:toNumber(get(v,"temperature_c")),
+      dewpoint:toNumber(get(v,"dewpoint_c")),
+      vaporPressure:toNumber(get(v,"vapor_pressure_hpa")),
+      humidity:toNumber(get(v,"humidity_pct")),
+      wind:toNumber(get(v,"wind_speed_ms")),
+      windDirection:get(v,"wind_direction"),
+      sunshineHour:toNumber(get(v,"sunshine_hour")),
+      sunshineHourRaw:get(v,"sunshine_hour_raw"),
+      solar:toNumber(get(v,"solar_mj_m2")),
+      solarRaw:get(v,"solar_raw"),
+      snowfall:toNumber(get(v,"snowfall_cm")),
+      snowfallRaw:get(v,"snowfall_raw"),
+      snowDepth:toNumber(get(v,"snow_depth_cm")),
+      snowDepthRaw:get(v,"snow_depth_raw"),
+      weatherRaw:get(v,"weather_raw"),
+      cloudRaw:get(v,"cloud_amount_raw"),
+      cloudNumeric,
+      cloudParseOk:Number(get(v,"cloud_parse_ok"))===1?1:0,
+      visibility:toNumber(get(v,"visibility_km")),
+      visibilityRaw:get(v,"visibility_raw")
+    };
+
+    out.push(row);
+  }
+
+  return out;
+}
+
+function deduplicateHourlyRows(rows){
+  const m=new Map();
+  for(const r of rows){
+    const key=`${r.station}|${r.ts}`;
+    m.set(key,r);
+  }
+  return [...m.values()];
+}
+
+function inspectHourlySource(fileName,text){
+  try{
+    const rows=parseHourlyTsvRows(text,fileName);
+    const sorted=[...rows].sort((a,b)=>a.ts-b.ts);
+
+    return {
+      file:fileName,
+      rowCount:rows.length,
+      firstTs:sorted[0]?.ts ?? NaN,
+      lastTs:sorted.at(-1)?.ts ?? NaN,
+      solarCount:rows.filter(r=>Number.isFinite(r.solar)).length,
+      cloudCount:rows.filter(r=>Number.isFinite(r.cloudNumeric)).length,
+      weatherCount:rows.filter(r=>String(r.weatherRaw||"").trim()).length,
+      visibilityCount:rows.filter(r=>Number.isFinite(r.visibility)).length,
+      parserVersions:[...new Set(rows.map(r=>r.parserVersion).filter(Boolean))],
+      availabilityVerified:rows.length>0 && rows.every(r=>r.availabilityVerified===1),
+      error:""
+    };
+  }catch(e){
+    return {
+      file:fileName,rowCount:0,firstTs:NaN,lastTs:NaN,
+      solarCount:0,cloudCount:0,weatherCount:0,visibilityCount:0,
+      parserVersions:[],availabilityVerified:false,error:e.message
+    };
+  }
+}
+
+function prepareHourlyContext(rows){
+  hourlyContextCache=new Map();
+
+  for(const [station,stationRows0] of groupByStation(rows).entries()){
+    hourlyContextCache.set(station,[...stationRows0].sort((a,b)=>a.ts-b.ts));
+  }
+}
+
+function percentile(values,p){
+  const a=values.filter(Number.isFinite).sort((x,y)=>x-y);
+  if(!a.length) return NaN;
+  const i=(a.length-1)*p;
+  const lo=Math.floor(i),hi=Math.ceil(i);
+  if(lo===hi) return a[lo];
+  return a[lo]+(a[hi]-a[lo])*(i-lo);
+}
+
+function findLatestEligibleHourly(station,originTs,predicate,validToField="ts"){
+  const rows=hourlyContextCache.get(station)||[];
+
+  for(let i=rows.length-1;i>=0;i--){
+    const r=rows[i];
+    if(r.ts>originTs) continue;
+
+    const validTo=Number.isFinite(r[validToField]) ? r[validToField] : r.ts;
+    if(validTo>originTs) continue;
+    if(!Number.isFinite(r.availableAt) || r.availableAt>originTs) continue;
+    if(predicate(r)) return r;
+  }
+
+  return null;
+}
+
+function buildAuxFeatureAt(station,originTs,variantId){
+  const v=AUX_VARIANTS.find(x=>x.id===variantId) || AUX_VARIANTS[0];
+  const x=[];
+  const names=[];
+
+  if(v.groups.includes("solar")){
+    const latest=findLatestEligibleHourly(
+      station,originTs,
+      r=>Number.isFinite(r.solar),
+      "solarValidTo"
+    );
+
+    const rows=hourlyContextCache.get(station)||[];
+    const solar3hRows=rows.filter(r=>
+      Number.isFinite(r.solar) &&
+      Number.isFinite(r.solarValidTo) &&
+      r.solarValidTo<=originTs &&
+      r.solarValidTo>originTs-180*60000 &&
+      Number.isFinite(r.availableAt) &&
+      r.availableAt<=originTs
+    );
+
+    const rawSolarAge=latest ? (originTs-latest.solarValidTo)/60000 : NaN;
+    const freshLatest=latest && rawSolarAge<=SOLAR_MAX_AGE_MIN ? latest : null;
+    const solarLatest=freshLatest?.solar;
+    const solarAge=freshLatest ? rawSolarAge : NaN;
+    const solar3h=solar3hRows.length ? solar3hRows.reduce((s,r)=>s+r.solar,0) : NaN;
+    const solarAvailable=freshLatest?1:0;
+
+    x.push(solarLatest,solarAge,solar3h,solarAvailable);
+    names.push(...AUX_FEATURE_NAMES.solar);
+  }
+
+  if(v.groups.includes("cloud")){
+    const latest=findLatestEligibleHourly(
+      station,originTs,
+      r=>Number.isFinite(r.cloudNumeric),
+      "stateValidAt"
+    );
+
+    const rawCloudAge=latest ? (originTs-latest.stateValidAt)/60000 : NaN;
+    const freshLatest=latest && rawCloudAge<=CLOUD_MAX_AGE_MIN ? latest : null;
+    const cloudLatest=freshLatest?.cloudNumeric;
+    const cloudAge=freshLatest ? rawCloudAge : NaN;
+    const cloudAvailable=freshLatest?1:0;
+
+    x.push(cloudLatest,cloudAge,cloudAvailable);
+    names.push(...AUX_FEATURE_NAMES.cloud);
+  }
+
+  return {x,names};
+}
+
+function renderHourlyDiagnostics(){
+  const body=$("hourlyDiagnosticBody");
+  body.innerHTML="";
+
+  for(const d of hourlyDiagnostics){
+    const tr=document.createElement("tr");
+    const period=
+      Number.isFinite(d.firstTs)&&Number.isFinite(d.lastTs)
+        ? `${formatDateTime(d.firstTs)} ～ ${formatDateTime(d.lastTs)}`
+        : "-";
+    const verdict=d.error
+      ? `<span class="badText">${escapeHtml(d.error)}</span>`
+      : d.availabilityVerified
+        ? `<span class="goodText">availability確認済み</span>`
+        : `<span class="warnText">availability未確認</span>`;
+
+    tr.innerHTML=
+      `<td>${escapeHtml(d.file)}</td>`+
+      `<td>${d.rowCount}</td>`+
+      `<td>${period}</td>`+
+      `<td>${d.solarCount}</td>`+
+      `<td>${d.cloudCount}</td>`+
+      `<td>${d.weatherCount}</td>`+
+      `<td>${d.visibilityCount}</td>`+
+      `<td>${escapeHtml(d.parserVersions.join(", ")||"-")}</td>`+
+      `<td>${verdict}</td>`;
+    body.appendChild(tr);
+  }
+
+  if(!hourlyDiagnostics.length){
+    body.innerHTML='<tr><td colspan="9">1時間補助TSVなし</td></tr>';
+  }
+
+  $("hourlyRowsKpi").textContent=globalHourlyRows.length.toLocaleString();
+  $("hourlyDaysKpi").textContent=`${countDays(globalHourlyRows)}日`;
+
+  if(!globalHourlyRows.length){
+    $("hourlyDiagnosticSummary").textContent=
+      "1時間補助データなし。本番51特徴量モデルは通常どおり動作します。";
+    return;
+  }
+
+  const solarCount=globalHourlyRows.filter(r=>Number.isFinite(r.solar)).length;
+  const cloudCount=globalHourlyRows.filter(r=>Number.isFinite(r.cloudNumeric)).length;
+  const weatherCount=globalHourlyRows.filter(r=>String(r.weatherRaw||"").trim()).length;
+  const visibilityCount=globalHourlyRows.filter(r=>Number.isFinite(r.visibility)).length;
+  const uniqueDates=[...new Set(globalHourlyRows.map(r=>r.date))];
+  const expected=uniqueDates.length*24;
+  const verified=globalHourlyRows.filter(r=>r.availabilityVerified===1).length;
+
+  // 10分起点で実際に使われる雲量のage分布を確認
+  const cloudAges=[];
+  for(const r of globalRows){
+    const c=findLatestEligibleHourly(r.station,r.ts,x=>Number.isFinite(x.cloudNumeric),"stateValidAt");
+    if(c) cloudAges.push((r.ts-c.stateValidAt)/60000);
+  }
+
+  const med=percentile(cloudAges,.5);
+  const p95=percentile(cloudAges,.95);
+  const station10=[...new Set(globalRows.map(r=>r.station))];
+  const station1=[...new Set(globalHourlyRows.map(r=>r.station))];
+  const mismatch=station1.filter(s=>!station10.includes(s));
+
+  $("hourlyDiagnosticSummary").textContent=
+    `1時間補助 ${globalHourlyRows.length.toLocaleString()}行 / ${uniqueDates.length}日 / 期待 ${expected.toLocaleString()}行\n`+
+    `日射 ${solarCount}件 / 雲量数値 ${cloudCount}件 / 天気 ${weatherCount}件 / 視程 ${visibilityCount}件\n`+
+    `availability確認済み ${verified}/${globalHourlyRows.length}行`+
+    `${verified<globalHourlyRows.length?"（未確認行は保存済みlagを仮定として使用）":""}\n`+
+    `雲量age 中央 ${Number.isFinite(med)?med.toFixed(0):"-"}分 / 95%点 ${Number.isFinite(p95)?p95.toFixed(0):"-"}分\n`+
+    `station不一致 ${mismatch.length}件 / 未来結合違反 0件（条件不成立データは結合対象外）\n`+
+    `安全結合: valid_to<=origin AND available_at<=origin`;
+}
+
 async function runAll(){
   return (async () => {
     const started=performance.now();
 
     try{
-      $("runStatus").textContent="読み込み・診断中...";
+      $("runStatus").textContent="10分値・1時間補助データを読み込み中...";
+
       const all=[];
       sourceDiagnostics=[];
       walkForwardResults=new Map();
@@ -681,8 +1543,16 @@ async function runAll(){
       renderWalkForwardDetail();
       $("walkForwardStatus").textContent="walk-forwardは未実行です。";
 
+      auxAblationResults=[];
+      auxWalkForwardResults=[];
+      $("auxAblationBody").innerHTML='<tr><td colspan="8">未実行</td></tr>';
+      $("auxWalkForwardBody").innerHTML='<tr><td colspan="9">未実行</td></tr>';
+      $("auxOriginBody").innerHTML='<tr><td colspan="5">未実行</td></tr>';
+      $("auxExperimentStatus").textContent="未実行です。";
+
       const preferFilenameDate = $("preferFilenameDate").checked;
 
+      // ---- 10分値 ----
       for(const file of stagedFiles){
         const text=await file.text();
 
@@ -706,7 +1576,7 @@ async function runAll(){
         currentIncluded=true;
 
         sourceDiagnostics.push({
-          file:"今日の入力",
+          file:"今日の10分入力",
           filenameDate:$("date").value.trim(),
           internalDates:[$("date").value.trim()],
           rowCount:parsed.rows.length,
@@ -721,22 +1591,64 @@ async function runAll(){
       globalRows=deduplicateRows(all).sort((a,b)=>a.ts-b.ts);
       const duplicateCount=beforeDedup-globalRows.length;
 
-      if(globalRows.length<100) throw new Error("データが少なすぎます。");
+      if(globalRows.length<100) throw new Error("10分データが少なすぎます。");
 
       useSeasonFeatures = countDays(globalRows) >= 90;
       featureCache = new Map();
       prepareRunCaches(globalRows);
 
+      // ---- 1時間補助値 ----
+      const hAll=[];
+      hourlyDiagnostics=[];
+
+      for(const file of stagedHourlyFiles){
+        const text=await file.text();
+        const diag=inspectHourlySource(file.name,text);
+        hourlyDiagnostics.push(diag);
+
+        if(!diag.error){
+          hAll.push(...parseHourlyTsvRows(text,file.name));
+        }
+      }
+
+      let currentHourlyIncluded=false;
+
+      if($("hourlyRaw").value.trim()){
+        const parsed=convertCurrentHourlyRaw();
+        hAll.push(...parsed.rows);
+        currentHourlyIncluded=true;
+
+        const rows=parsed.rows;
+        hourlyDiagnostics.push({
+          file:"今日の1時間入力",
+          rowCount:rows.length,
+          firstTs:rows[0]?.ts ?? NaN,
+          lastTs:rows.at(-1)?.ts ?? NaN,
+          solarCount:rows.filter(r=>Number.isFinite(r.solar)).length,
+          cloudCount:rows.filter(r=>Number.isFinite(r.cloudNumeric)).length,
+          weatherCount:rows.filter(r=>String(r.weatherRaw||"").trim()).length,
+          visibilityCount:rows.filter(r=>Number.isFinite(r.visibility)).length,
+          parserVersions:[PARSER_VERSION],
+          availabilityVerified:getHourlyAvailabilityVerified(),
+          error:""
+        });
+      }
+
+      globalHourlyRows=deduplicateHourlyRows(hAll).sort((a,b)=>a.ts-b.ts);
+      prepareHourlyContext(globalHourlyRows);
+
       renderDiagnostics(globalRows,duplicateCount,preferFilenameDate);
       renderDataSummary(globalRows);
+      renderHourlyDiagnostics();
 
+      // ---- 本番51特徴量：v7経路をそのまま維持 ----
       modelResults=new Map();
 
       for(let i=0;i<ALL_HORIZONS.length;i++){
         const h=ALL_HORIZONS[i];
 
         if(i===0 || i%8===0 || i===ALL_HORIZONS.length-1){
-          $("runStatus").textContent=`学習中... ${h.label}後モデル (${h.steps}/144)`;
+          $("runStatus").textContent=`本番51特徴量を学習中... ${h.label}後 (${h.steps}/144)`;
           await nextFrame();
         }
 
@@ -754,11 +1666,12 @@ async function runAll(){
       const elapsed=(performance.now()-started)/1000;
 
       $("runStatus").textContent =
-        `完了：${stagedFiles.length}個の過去TSV${currentIncluded ? " + 今日の入力" : ""}を統合\n` +
-        `観測 ${globalRows.length.toLocaleString()}行 / 収録 ${countDays(globalRows)}日\n` +
-        `重複除去 ${duplicateCount.toLocaleString()}行 / 季節特徴 ${useSeasonFeatures ? "ON" : "OFF（90日未満）"}\n` +
-        `未来予測モデル 144本（10分刻み・24時間先まで）\n` +
-        `AI入力特徴量 ${FEATURE_NAMES.length}個 / 元観測列を全項目使用\n` +
+        `完了：10分 ${stagedFiles.length}過去TSV${currentIncluded ? " + 今日入力" : ""}`+
+        ` / 1時間補助 ${stagedHourlyFiles.length}過去TSV${currentHourlyIncluded ? " + 今日入力" : ""}\n`+
+        `10分観測 ${globalRows.length.toLocaleString()}行 / ${countDays(globalRows)}日 / 重複除去 ${duplicateCount.toLocaleString()}行\n`+
+        `1時間補助 ${globalHourlyRows.length.toLocaleString()}行 / ${countDays(globalHourlyRows)}日\n`+
+        `本番モデル 144本 / 本番特徴量 ${FEATURE_NAMES.length}個 / v7の51特徴量経路を変更なし\n`+
+        `10分availability 0分lag（v7互換・未確認） / 季節特徴 ${useSeasonFeatures ? "ON" : "OFF（90日未満）"}\n`+
         `通常計算時間 ${elapsed.toFixed(2)}秒`;
     }catch(e){
       $("runStatus").textContent="エラー\n"+e.message;
@@ -815,6 +1728,13 @@ function rawRowToObject(date,station,r){
 
   const obj={
     ts,date,time:r[0],station,
+
+    // v7互換の0分lag方針。実際の公開遅延は未確認。
+    nominalAt:ts,
+    stateValidAt:ts,
+    availableAt:ts,
+    availabilityLagMin:0,
+    availabilityVerified:0,
 
     pressureLocal:toNumber(r[1]),
     pressure:toNumber(r[2]),
@@ -888,6 +1808,13 @@ function parseTsvRows(text,overrideDate=null,sourceName=""){
       time,
       station,
       sourceName,
+
+      // 旧TSVにはavailability列がないため、v7互換0分lagを仮定。
+      nominalAt:parseDateTime(date,time),
+      stateValidAt:parseDateTime(date,time),
+      availableAt:parseDateTime(date,time),
+      availabilityLagMin:0,
+      availabilityVerified:0,
 
       pressureLocal:toNumber(v[idx.pressure_local_hpa]),
       pressure:toNumber(v[idx.pressure_sea_hpa]),
@@ -1089,6 +2016,7 @@ function buildSamples(rows,steps){
         deltaTemp,
         targetTemp,
         currentTemp:cur.temperature,
+        station:cur.station,
         ts:cur.ts,
         targetTs:target.ts
       });
@@ -1352,6 +2280,445 @@ function trainRidgeClosedForm(samples,lambda){
   const weights=solveLinearSystem(A,b);
 
   return {weights,xMean,xStd,yMean,yStd};
+}
+
+
+function variantFeatureNames(variantId){
+  const v=AUX_VARIANTS.find(x=>x.id===variantId) || AUX_VARIANTS[0];
+  const out=[...FEATURE_NAMES];
+  for(const g of v.groups) out.push(...AUX_FEATURE_NAMES[g]);
+  return out;
+}
+
+function buildExtendedSamples(rows,steps,variantId){
+  const base=buildSamples(rows,steps);
+
+  if(variantId==="B0") return base.map(s=>({...s,x:[...s.x]}));
+
+  return base.map(s=>{
+    const a=buildAuxFeatureAt(s.station,s.ts,variantId);
+    return {...s,x:[...s.x,...a.x]};
+  });
+}
+
+// 欠損補完用。平均・標準偏差は「渡された学習samplesだけ」で計算する。
+// テスト/未来データを統計量計算へ混ぜない。
+function trainRidgeClosedFormMissing(samples,lambda){
+  const X=samples.map(s=>s.x);
+  const y=samples.map(s=>s.y);
+  const p=X[0].length,n=X.length;
+
+  const xMean=Array(p).fill(0);
+  const counts=Array(p).fill(0);
+
+  for(const row of X){
+    for(let j=0;j<p;j++){
+      if(Number.isFinite(row[j])){
+        xMean[j]+=row[j];
+        counts[j]++;
+      }
+    }
+  }
+
+  for(let j=0;j<p;j++){
+    xMean[j]=counts[j] ? xMean[j]/counts[j] : 0;
+  }
+
+  const xStd=Array(p).fill(0);
+
+  for(const row of X){
+    for(let j=0;j<p;j++){
+      if(!Number.isFinite(row[j])) continue;
+      const d=row[j]-xMean[j];
+      xStd[j]+=d*d;
+    }
+  }
+
+  for(let j=0;j<p;j++){
+    xStd[j]=counts[j] ? Math.sqrt(xStd[j]/counts[j]) : 1;
+    if(!Number.isFinite(xStd[j]) || xStd[j]<1e-9) xStd[j]=1;
+  }
+
+  const yMean=y.reduce((a,b)=>a+b,0)/n;
+  let yVar=0;
+  for(const v of y){
+    const d=v-yMean;
+    yVar+=d*d;
+  }
+  let yStd=Math.sqrt(yVar/n);
+  if(yStd<1e-9) yStd=1;
+
+  const A=Array.from({length:p},()=>Array(p).fill(0));
+  const b=Array(p).fill(0);
+  const z=Array(p).fill(0);
+
+  for(let i=0;i<n;i++){
+    const row=X[i];
+
+    for(let j=0;j<p;j++){
+      // 欠損はtrain平均で補完 → 標準化後は0。
+      const v=Number.isFinite(row[j]) ? row[j] : xMean[j];
+      z[j]=(v-xMean[j])/xStd[j];
+    }
+
+    const ty=(y[i]-yMean)/yStd;
+
+    for(let j=0;j<p;j++){
+      const zj=z[j];
+      b[j]+=zj*ty;
+      for(let k=j;k<p;k++) A[j][k]+=zj*z[k];
+    }
+  }
+
+  for(let j=0;j<p;j++){
+    for(let k=j+1;k<p;k++) A[k][j]=A[j][k];
+    A[j][j]+=lambda*n;
+  }
+
+  return {
+    weights:solveLinearSystem(A,b),
+    xMean,xStd,yMean,yStd,
+    finiteCounts:counts,
+    missingAware:true
+  };
+}
+
+function predictModelMissing(model,x){
+  let z=0;
+
+  for(let j=0;j<model.weights.length;j++){
+    const raw=Number.isFinite(x[j]) ? x[j] : model.xMean[j];
+    z+=model.weights[j]*((raw-model.xMean[j])/model.xStd[j]);
+  }
+
+  return model.yMean+model.yStd*z;
+}
+
+function trainExtendedHoldout(steps,variantId){
+  if(variantId==="B0"){
+    const r=modelResults.get(steps);
+    if(!r?.ok) return {ok:false,error:r?.error||"B0不可"};
+
+    return {
+      ok:true,
+      variantId,
+      featureCount:FEATURE_NAMES.length,
+      modelMae:r.modelMae,
+      trainCount:r.trainCount,
+      testCount:r.testCount,
+      testActual:r.testActual,
+      testPred:r.testPred
+    };
+  }
+
+  const samples=buildExtendedSamples(globalRows,steps,variantId);
+  if(samples.length<120) return {ok:false,error:"学習サンプル不足"};
+
+  const splitIndex=Math.floor(samples.length*.8);
+  const testStartTs=samples[splitIndex]?.ts;
+  if(!Number.isFinite(testStartTs)) return {ok:false,error:"検証区間を作れません"};
+
+  const train=samples.filter(s=>s.targetTs<testStartTs);
+  const test=samples.filter(s=>s.ts>=testStartTs);
+
+  if(train.length<80 || test.length<20) return {ok:false,error:"検証サンプル不足"};
+
+  const model=trainRidgeClosedFormMissing(train,0.8);
+  const pred=test.map(s=>s.currentTemp+predictModelMissing(model,s.x));
+  const actual=test.map(s=>s.targetTemp);
+
+  return {
+    ok:true,
+    variantId,
+    featureCount:variantFeatureNames(variantId).length,
+    modelMae:mae(actual,pred),
+    trainCount:train.length,
+    testCount:test.length,
+    testActual:actual,
+    testPred:pred
+  };
+}
+
+async function runAuxAblation(){
+  if(!globalRows.length || !modelResults.size){
+    $("auxExperimentStatus").textContent="先に通常の統合・学習を実行してください。";
+    return;
+  }
+
+  const started=performance.now();
+
+  try{
+    auxAblationResults=[];
+    $("auxExperimentStatus").textContent="代表8 horizonのA/Bを計算中...";
+
+    for(let hi=0;hi<DISPLAY_HORIZONS.length;hi++){
+      const h=DISPLAY_HORIZONS[hi];
+      await nextFrame();
+
+      const b0=trainExtendedHoldout(h.steps,"B0");
+      if(!b0.ok) continue;
+
+      for(const v of AUX_VARIANTS){
+        const r=v.id==="B0" ? b0 : trainExtendedHoldout(h.steps,v.id);
+        auxAblationResults.push({
+          horizon:h,
+          variant:v,
+          ...r,
+          b0Mae:b0.modelMae,
+          delta:r.ok ? r.modelMae-b0.modelMae : NaN,
+          improvement:r.ok && b0.modelMae>0
+            ? (b0.modelMae-r.modelMae)/b0.modelMae*100
+            : NaN
+        });
+      }
+
+      $("auxExperimentStatus").textContent=
+        `A/B実験中... ${h.label}後 (${hi+1}/${DISPLAY_HORIZONS.length})`;
+    }
+
+    renderAuxAblation();
+
+    const elapsed=(performance.now()-started)/1000;
+    $("auxExperimentStatus").textContent=
+      `A/B完了：代表8 horizon × ${AUX_VARIANTS.length}構成 / ${elapsed.toFixed(2)}秒\n`+
+      `B0は本番v7互換51特徴量の結果をそのまま参照。B1-B3のみ補助特徴を追加。\n`+
+      `※この結果は開発診断です。良かった構成を自動で本番144モデルへ昇格させません。`;
+  }catch(e){
+    $("auxExperimentStatus").textContent="A/Bエラー\n"+e.message;
+  }
+}
+
+function renderAuxAblation(){
+  const body=$("auxAblationBody");
+  body.innerHTML="";
+
+  if(!auxAblationResults.length){
+    body.innerHTML='<tr><td colspan="8">未実行</td></tr>';
+    return;
+  }
+
+  for(const r of auxAblationResults){
+    const tr=document.createElement("tr");
+
+    if(!r.ok){
+      tr.innerHTML=
+        `<td>${r.horizon.label}</td><td>${escapeHtml(r.variant.label)}</td>`+
+        `<td colspan="6">${escapeHtml(r.error||"不可")}</td>`;
+    }else{
+      tr.innerHTML=
+        `<td>${r.horizon.label}</td>`+
+        `<td><b>${escapeHtml(r.variant.label)}</b></td>`+
+        `<td>${r.featureCount}</td>`+
+        `<td>${r.modelMae.toFixed(3)} ℃</td>`+
+        `<td>${r.variant.id==="B0"?"-":formatSigned(r.delta)+" ℃"}</td>`+
+        `<td class="${r.improvement>0?"goodText":r.improvement<0?"badText":""}">`+
+          `${r.variant.id==="B0"?"-":r.improvement.toFixed(1)+" %"}</td>`+
+        `<td>${r.trainCount}</td>`+
+        `<td>${r.testCount}</td>`;
+    }
+
+    body.appendChild(tr);
+  }
+}
+
+function makeOriginDateKey(ts){
+  const d=new Date(ts);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+
+async function runAuxWalkForward(){
+  if(!globalRows.length || !modelResults.size){
+    $("auxExperimentStatus").textContent="先に通常の統合・学習を実行してください。";
+    return;
+  }
+
+  if(!globalHourlyRows.length){
+    $("auxExperimentStatus").textContent="B3 walk-forwardには1時間補助データが必要です。";
+    return;
+  }
+
+  const started=performance.now();
+
+  try{
+    auxWalkForwardResults=[];
+    const latestStation=globalRows.at(-1).station;
+    const ctx=stationContextCache?.get(latestStation);
+    if(!ctx) throw new Error("地点データを取得できません。");
+
+    const rows=ctx.rows;
+    const map=ctx.map;
+    const firstTs=rows[0].ts;
+    const latestTs=rows.at(-1).ts;
+    const allowedHours=new Set([0,6,12,18]);
+
+    for(let hi=0;hi<DISPLAY_HORIZONS.length;hi++){
+      const h=DISPLAY_HORIZONS[hi];
+
+      $("auxExperimentStatus").textContent=
+        `4起点walk-forward中... ${h.label}後 (${hi+1}/${DISPLAY_HORIZONS.length})`;
+      await nextFrame();
+
+      const samples0=buildSamples(globalRows,h.steps);
+      const samples3=buildExtendedSamples(globalRows,h.steps,"B3");
+
+      const origins=rows.filter(r=>{
+        const d=new Date(r.ts);
+        return (
+          d.getMinutes()===0 &&
+          allowedHours.has(d.getHours()) &&
+          r.ts-firstTs>=7*86400000 &&
+          r.ts+h.minutes*60000<=latestTs &&
+          !!makeFeature(r,map)
+        );
+      });
+
+      const cases=[];
+
+      for(let oi=0;oi<origins.length;oi++){
+        const origin=origins[oi];
+        const target=map.get(origin.ts+h.minutes*60000);
+        if(!target) continue;
+
+        const train0=samples0.filter(s=>s.targetTs<=origin.ts);
+        const train3=samples3.filter(s=>s.targetTs<=origin.ts);
+
+        if(train0.length<300 || train3.length<300) continue;
+
+        const baseX=makeFeature(origin,map);
+        if(!baseX) continue;
+
+        const aux=buildAuxFeatureAt(origin.station,origin.ts,"B3");
+        const x3=[...baseX,...aux.x];
+
+        const m0=trainRidgeClosedForm(train0,0.8);
+        const m3=trainRidgeClosedFormMissing(train3,0.8);
+
+        const p0=origin.temperature+predictModel(m0,baseX);
+        const p3=origin.temperature+predictModelMissing(m3,x3);
+        const actual=target.temperature;
+
+        cases.push({
+          originTs:origin.ts,
+          originHour:new Date(origin.ts).getHours(),
+          day:makeOriginDateKey(origin.ts),
+          targetTs:target.ts,
+          actual,
+          p0,p3,
+          e0:p0-actual,
+          e3:p3-actual,
+          a0:Math.abs(p0-actual),
+          a3:Math.abs(p3-actual)
+        });
+      }
+
+      if(!cases.length){
+        auxWalkForwardResults.push({horizon:h,ok:false,error:"ケース不足"});
+        continue;
+      }
+
+      const b0Mae=cases.reduce((s,c)=>s+c.a0,0)/cases.length;
+      const b3Mae=cases.reduce((s,c)=>s+c.a3,0)/cases.length;
+      const improvement=b0Mae>0?(b0Mae-b3Mae)/b0Mae*100:0;
+      const bias=cases.reduce((s,c)=>s+c.e3,0)/cases.length;
+      const winRate=cases.filter(c=>c.a3<c.a0).length/cases.length*100;
+
+      const dayGroups=new Map();
+      for(const c of cases){
+        if(!dayGroups.has(c.day)) dayGroups.set(c.day,[]);
+        dayGroups.get(c.day).push(c);
+      }
+
+      let dayWins=0,dayTies=0;
+
+      for(const dc of dayGroups.values()){
+        const d0=dc.reduce((s,c)=>s+c.a0,0)/dc.length;
+        const d3=dc.reduce((s,c)=>s+c.a3,0)/dc.length;
+        if(d3<d0) dayWins++;
+        else if(Math.abs(d3-d0)<1e-12) dayTies++;
+      }
+
+      const dayWinRate=(dayWins+.5*dayTies)/dayGroups.size*100;
+
+      const byOrigin={};
+      for(const hour of [0,6,12,18]){
+        const a=cases.filter(c=>c.originHour===hour);
+        if(!a.length){
+          byOrigin[hour]=NaN;
+          continue;
+        }
+        const m0=a.reduce((s,c)=>s+c.a0,0)/a.length;
+        const m3=a.reduce((s,c)=>s+c.a3,0)/a.length;
+        byOrigin[hour]=m3-m0; // 負ならB3改善
+      }
+
+      auxWalkForwardResults.push({
+        horizon:h,
+        ok:true,
+        cases,
+        caseCount:cases.length,
+        dayCount:dayGroups.size,
+        b0Mae,b3Mae,improvement,bias,winRate,dayWinRate,byOrigin
+      });
+    }
+
+    renderAuxWalkForward();
+
+    const elapsed=(performance.now()-started)/1000;
+    $("auxExperimentStatus").textContent=
+      `4起点walk-forward完了：B0 vs B3 / ${elapsed.toFixed(2)}秒\n`+
+      `起点 00/06/12/18時。各foldの補完平均・標準偏差は学習側だけで再計算。\n`+
+      `ケース勝率と「日別平均でB3が勝った日率」を分けて表示しています。`;
+  }catch(e){
+    $("auxExperimentStatus").textContent="walk-forwardエラー\n"+e.message;
+  }
+}
+
+function renderAuxWalkForward(){
+  const body=$("auxWalkForwardBody");
+  const obody=$("auxOriginBody");
+  body.innerHTML="";
+  obody.innerHTML="";
+
+  if(!auxWalkForwardResults.length){
+    body.innerHTML='<tr><td colspan="9">未実行</td></tr>';
+    obody.innerHTML='<tr><td colspan="5">未実行</td></tr>';
+    return;
+  }
+
+  for(const r of auxWalkForwardResults){
+    const tr=document.createElement("tr");
+    const otr=document.createElement("tr");
+
+    if(!r.ok){
+      tr.innerHTML=`<td>${r.horizon.label}</td><td colspan="8">${escapeHtml(r.error||"不可")}</td>`;
+      otr.innerHTML=`<td>${r.horizon.label}</td><td colspan="4">-</td>`;
+    }else{
+      tr.innerHTML=
+        `<td>${r.horizon.label}</td>`+
+        `<td>${r.caseCount}</td>`+
+        `<td>${r.dayCount}</td>`+
+        `<td>${r.b0Mae.toFixed(3)} ℃</td>`+
+        `<td>${r.b3Mae.toFixed(3)} ℃</td>`+
+        `<td class="${r.improvement>0?"goodText":"badText"}">${r.improvement.toFixed(1)} %</td>`+
+        `<td>${formatSigned(r.bias)} ℃</td>`+
+        `<td>${r.winRate.toFixed(1)} %</td>`+
+        `<td>${r.dayWinRate.toFixed(1)} %</td>`;
+
+      const cell=hour=>{
+        const v=r.byOrigin[hour];
+        if(!Number.isFinite(v)) return "-";
+        const cls=v<0?"goodText":v>0?"badText":"";
+        return `<span class="${cls}">${formatSigned(v)} ℃</span>`;
+      };
+
+      otr.innerHTML=
+        `<td>${r.horizon.label}</td>`+
+        `<td>${cell(0)}</td><td>${cell(6)}</td><td>${cell(12)}</td><td>${cell(18)}</td>`;
+    }
+
+    body.appendChild(tr);
+    obody.appendChild(otr);
+  }
 }
 
 function solveLinearSystem(A,b){
