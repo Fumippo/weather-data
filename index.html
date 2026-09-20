@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Weather Forecast Lab v5</title>
+<title>Weather Forecast Lab v6</title>
 <style>
 :root{
   --bg:#0b1020;
@@ -138,10 +138,10 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
 <div class="wrap">
   <div class="hero">
     <div>
-      <h1>Weather Forecast Lab <span style="font-size:.38em;color:var(--muted)">v5</span></h1>
+      <h1>Weather Forecast Lab <span style="font-size:.38em;color:var(--muted)">v6</span></h1>
       <p>10分値をTSV化し、現在気温からの変化量 ΔT を学習して多時間先を予測するブラウザ完結型ダッシュボード</p>
     </div>
-    <div class="badge">v5 / 10分刻み144モデル + ΔT補正 + 自動モデル選択</div>
+    <div class="badge">v6 / 全観測項目 + 10分刻み144モデル + ΔT補正</div>
   </div>
 
   <div class="grid">
@@ -317,8 +317,10 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
           10分後から24時間後まで10分刻みで144個の別モデルを学習します。表の代表時間だけでなく、20分後・40分後・5時間10分後なども直接予測します。<br><br>
           <b>最終計算：</b>現在気温 ＋ AIが予測したΔT ＝ AI未来気温。<br>
           これにより短時間予報で学習平均へ無理に引っ張られる挙動を抑えます。<br><br>
-          <b>主な入力：</b>現在の気温・湿度・海面気圧・風速・日照、
-          10分/30分/1時間/3時間/24時間の変化、時刻。季節周期は90日未満では無効です。<br><br>
+          <b>入力：</b>元表の観測情報を全項目使用します。気温、相対湿度、現地気圧、海面気圧、降水量、
+          平均風速・平均風向、最大瞬間風速・最大瞬間風向、日照時間を入力し、
+          さらに降水累積、降り始め/雨上がり、風向ベクトル、突風強度、日照累積、
+          各種時間変化へ展開します。季節周期は90日未満では無効です。<br><br>
           <b>検証：</b>古い側で学習し、新しい側でテストします。
           予測対象期間が学習側へ食い込まないよう、予測時間ぶんの境界を空けています。
           実際の未来予測は、その後に全利用可能データで再学習します。<br><br>
@@ -327,6 +329,19 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
         </div>
       </section>
     </div>
+
+    <section class="panel full">
+      <h2>AIが使用する情報</h2>
+      <div class="explain">
+        <b>元表の全観測列を使用：</b>
+        現地気圧・海面気圧・降水量・気温・相対湿度・平均風速・平均風向・最大瞬間風速・最大瞬間風向・日照時間。<br><br>
+        <b>加工して使う情報：</b>
+        降水量は現在値に加えて30分/1時間/3時間累積と降り始め・雨上がり、
+        風向は16方位を東西/南北ベクトルへ変換、最大瞬間風は突風増幅量と1時間/3時間最大値、
+        日照は30分/1時間/3時間累積、気温・気圧・湿度・風速は複数時間差を使用します。<br><br>
+        <b>特徴量数：</b><span id="featureCountText"></span>
+      </div>
+    </section>
   </div>
 </div>
 
@@ -358,12 +373,78 @@ const ALL_HORIZONS = Array.from({length:144},(_,i)=>{
 });
 
 const FEATURE_NAMES = [
-  "現在気温","現在湿度","海面気圧","風速","日照",
-  "気温10分変化","気温30分変化","気温1時間変化","気温3時間変化","気温24時間差",
-  "気圧30分変化","気圧1時間変化","気圧3時間変化","気圧24時間差",
-  "湿度30分変化","湿度1時間変化","湿度3時間変化",
-  "風速30分変化","風速1時間変化",
-  "時刻sin","時刻cos","季節sin","季節cos"
+  // 現在値
+  "現在気温",
+  "現在湿度",
+  "海面気圧",
+  "現地気圧",
+  "海面-現地気圧差",
+  "現在日照",
+  "現在降水量",
+
+  // 降水
+  "30分降水量",
+  "1時間降水量",
+  "3時間降水量",
+  "現在降水中",
+  "30分以内に降り始め",
+  "30分以内に雨が止んだ",
+
+  // 平均風・風向
+  "平均風速",
+  "平均風 東西成分",
+  "平均風 南北成分",
+  "静穏フラグ",
+
+  // 最大瞬間風
+  "最大瞬間風速",
+  "瞬間風 東西成分",
+  "瞬間風 南北成分",
+  "突風増幅量",
+  "1時間最大瞬間風速",
+  "3時間最大瞬間風速",
+
+  // 日照累積
+  "30分日照",
+  "1時間日照",
+  "3時間日照",
+
+  // 気温変化
+  "気温10分変化",
+  "気温30分変化",
+  "気温1時間変化",
+  "気温3時間変化",
+  "気温24時間差",
+
+  // 海面気圧変化
+  "海面気圧30分変化",
+  "海面気圧1時間変化",
+  "海面気圧3時間変化",
+  "海面気圧24時間差",
+
+  // 現地気圧変化
+  "現地気圧1時間変化",
+  "現地気圧3時間変化",
+
+  // 湿度変化
+  "湿度30分変化",
+  "湿度1時間変化",
+  "湿度3時間変化",
+  "湿度24時間差",
+
+  // 風の変化
+  "風速30分変化",
+  "風速1時間変化",
+  "風速3時間変化",
+  "平均風 東西成分1時間変化",
+  "平均風 南北成分1時間変化",
+  "最大瞬間風速1時間変化",
+
+  // 時刻・季節
+  "時刻sin",
+  "時刻cos",
+  "季節sin",
+  "季節cos"
 ];
 
 let stagedFiles = [];
@@ -373,8 +454,10 @@ let globalRows = [];
 let modelResults = new Map();
 let sourceDiagnostics = [];
 let useSeasonFeatures = false;
+let featureCache = new Map();
 
 setToday();
+if($("featureCountText")) $("featureCountText").textContent=`${FEATURE_NAMES.length}個`;
 
 ["date","station","raw"].forEach(id => {
   $(id).addEventListener("input", () => {
@@ -464,21 +547,36 @@ $("downloadMerged").addEventListener("click", () => {
     }
 
     const header=[
-      "date","station","time","temperature_c","humidity_pct",
-      "pressure_sea_hpa","wind_speed_ms","sunshine_min"
+      "date","station","time",
+      "pressure_local_hpa","pressure_sea_hpa","precip_mm",
+      "temperature_c","humidity_pct",
+      "wind_speed_ms","wind_direction",
+      "gust_speed_ms","gust_direction",
+      "sunshine_min"
     ];
 
     const lines=[header.join("\t")];
 
     for(const r of globalRows){
       lines.push([
-        r.date,r.station,r.time,
-        r.temperature,r.humidity,r.pressure,r.wind,r.sunshine
+        r.date,
+        r.station,
+        r.time,
+        r.pressureLocal,
+        r.pressure,
+        r.precip,
+        r.temperature,
+        r.humidity,
+        r.wind,
+        r.windDirection,
+        r.gust,
+        r.gustDirection,
+        r.sunshine
       ].join("\t"));
     }
 
     download(
-      "weather_merged_corrected.tsv",
+      "weather_merged_corrected_full.tsv",
       lines.join("\n")+"\n",
       "text/tab-separated-values;charset=utf-8"
     );
@@ -559,6 +657,7 @@ async function runAll(){
       if(globalRows.length<100) throw new Error("データが少なすぎます。");
 
       useSeasonFeatures = countDays(globalRows) >= 90;
+      featureCache = new Map();
 
       renderDiagnostics(globalRows,duplicateCount,preferFilenameDate);
       renderDataSummary(globalRows);
@@ -583,7 +682,8 @@ async function runAll(){
         `完了：${stagedFiles.length}個の過去TSV${currentIncluded ? " + 今日の入力" : ""}を統合\n` +
         `観測 ${globalRows.length.toLocaleString()}行 / 収録 ${countDays(globalRows)}日\n` +
         `重複除去 ${duplicateCount.toLocaleString()}行 / 季節特徴 ${useSeasonFeatures ? "ON" : "OFF（90日未満）"}\n` +
-        `未来予測モデル 144本（10分刻み・24時間先まで）`;
+        `未来予測モデル 144本（10分刻み・24時間先まで）\n` +
+        `AI入力特徴量 ${FEATURE_NAMES.length}個 / 元観測列を全項目使用`;
     }catch(e){
       $("runStatus").textContent="エラー\n"+e.message;
     }
@@ -633,18 +733,44 @@ function convertCurrentRaw(){
 
 function rawRowToObject(date,station,r){
   const ts=parseDateTime(date,r[0]);
+
+  const windSpeed=toNumber(r[6]);
+  const gustSpeed=toNumber(r[8]);
+
   const obj={
     ts,date,time:r[0],station,
+
+    pressureLocal:toNumber(r[1]),
+    pressure:toNumber(r[2]),
+    precip:toPrecipNumber(r[3]),
+
     temperature:toNumber(r[4]),
     humidity:toNumber(r[5]),
-    pressure:toNumber(r[2]),
-    wind:toNumber(r[6]),
+
+    wind:windSpeed,
+    windDirection:r[7] || "",
+    gust:gustSpeed,
+    gustDirection:r[9] || "",
+
     sunshine:toNumber(r[10])
   };
-  if(!Number.isFinite(obj.ts)||!Number.isFinite(obj.temperature)||!Number.isFinite(obj.humidity)||
-     !Number.isFinite(obj.pressure)||!Number.isFinite(obj.wind)) return null;
+
   if(!Number.isFinite(obj.sunshine)) obj.sunshine=0;
-  return obj;
+
+  if(
+    !Number.isFinite(obj.ts) ||
+    !Number.isFinite(obj.temperature) ||
+    !Number.isFinite(obj.humidity) ||
+    !Number.isFinite(obj.pressure) ||
+    !Number.isFinite(obj.pressureLocal) ||
+    !Number.isFinite(obj.precip) ||
+    !Number.isFinite(obj.wind) ||
+    !Number.isFinite(obj.gust)
+  ){
+    return null;
+  }
+
+  return attachWindVectors(obj);
 }
 
 function parseTsvRows(text,overrideDate=null,sourceName=""){
@@ -652,10 +778,20 @@ function parseTsvRows(text,overrideDate=null,sourceName=""){
   if(lines.length<2) return [];
 
   const header=lines[0].replace(/^\uFEFF/,"").split("\t");
-  const required=["date","station","time","pressure_sea_hpa","temperature_c","humidity_pct","wind_speed_ms","sunshine_min"];
+
+  const required=[
+    "date","station","time",
+    "pressure_local_hpa","pressure_sea_hpa","precip_mm",
+    "temperature_c","humidity_pct",
+    "wind_speed_ms","wind_direction",
+    "gust_speed_ms","gust_direction",
+    "sunshine_min"
+  ];
 
   for(const n of required){
-    if(!header.includes(n)) throw new Error(`TSVに必要な列がありません: ${n} (${sourceName})`);
+    if(!header.includes(n)){
+      throw new Error(`TSVに必要な列がありません: ${n} (${sourceName})`);
+    }
   }
 
   const idx=Object.fromEntries(header.map((n,i)=>[n,i]));
@@ -676,17 +812,30 @@ function parseTsvRows(text,overrideDate=null,sourceName=""){
       time,
       station,
       sourceName,
+
+      pressureLocal:toNumber(v[idx.pressure_local_hpa]),
+      pressure:toNumber(v[idx.pressure_sea_hpa]),
+      precip:toPrecipNumber(v[idx.precip_mm]),
+
       temperature:toNumber(v[idx.temperature_c]),
       humidity:toNumber(v[idx.humidity_pct]),
-      pressure:toNumber(v[idx.pressure_sea_hpa]),
+
       wind:toNumber(v[idx.wind_speed_ms]),
+      windDirection:v[idx.wind_direction]??"",
+      gust:toNumber(v[idx.gust_speed_ms]),
+      gustDirection:v[idx.gust_direction]??"",
+
       sunshine:toNumber(v[idx.sunshine_min])
     };
 
     if(!Number.isFinite(row.sunshine)) row.sunshine=0;
 
-    if([row.ts,row.temperature,row.humidity,row.pressure,row.wind].every(Number.isFinite)){
-      out.push(row);
+    if([
+      row.ts,row.temperature,row.humidity,
+      row.pressure,row.pressureLocal,row.precip,
+      row.wind,row.gust
+    ].every(Number.isFinite)){
+      out.push(attachWindVectors(row));
     }
   }
 
@@ -853,10 +1002,33 @@ function buildLatestFeature(rows){
 }
 
 function makeFeature(cur,map){
-  const get=(m)=>map.get(cur.ts-m*60*1000);
-  const l10=get(10),l30=get(30),l60=get(60),l180=get(180),l1440=get(1440);
+  const cacheKey=`${cur.station}|${cur.ts}|${useSeasonFeatures?1:0}`;
 
-  if(!l10||!l30||!l60||!l180||!l1440) return null;
+  if(featureCache.has(cacheKey)){
+    return featureCache.get(cacheKey);
+  }
+
+  const get=(m)=>map.get(cur.ts-m*60*1000);
+
+  const l10=get(10);
+  const l30=get(30);
+  const l60=get(60);
+  const l180=get(180);
+  const l1440=get(1440);
+
+  if(!l10||!l30||!l60||!l180||!l1440){
+    featureCache.set(cacheKey,null);
+    return null;
+  }
+
+  const w30=getWindowRows(map,cur.ts,30);
+  const w60=getWindowRows(map,cur.ts,60);
+  const w180=getWindowRows(map,cur.ts,180);
+
+  if(!w30||!w60||!w180){
+    featureCache.set(cacheKey,null);
+    return null;
+  }
 
   const d=new Date(cur.ts);
   const hour=d.getHours()+d.getMinutes()/60;
@@ -869,27 +1041,107 @@ function makeFeature(cur,map){
   const seasonSin=useSeasonFeatures ? Math.sin(da) : 0;
   const seasonCos=useSeasonFeatures ? Math.cos(da) : 0;
 
+  const precip30=sumField(w30,"precip");
+  const precip60=sumField(w60,"precip");
+  const precip180=sumField(w180,"precip");
+
+  const sunshine30=sumField(w30,"sunshine");
+  const sunshine60=sumField(w60,"sunshine");
+  const sunshine180=sumField(w180,"sunshine");
+
+  const gustMax60=maxField(w60,"gust");
+  const gustMax180=maxField(w180,"gust");
+
+  const rainNow=cur.precip>0 ? 1 : 0;
+  const rain30Ago=l30.precip>0 ? 1 : 0;
+
+  // 直近30分内のどこかで「0 → 降水」になったか
+  const rainStarted30=hasStateTransition(w30,r=>r.precip>0,false,true) ? 1 : 0;
+
+  // 直近30分内のどこかで「降水 → 0」になったか
+  const rainStopped30=hasStateTransition(w30,r=>r.precip>0,true,false) ? 1 : 0;
+
+  const pressureGap=cur.pressure-cur.pressureLocal;
+  const gustExcess=Math.max(0,cur.gust-cur.wind);
+
   const x=[
-    cur.temperature,cur.humidity,cur.pressure,cur.wind,cur.sunshine,
+    // 現在値
+    cur.temperature,
+    cur.humidity,
+    cur.pressure,
+    cur.pressureLocal,
+    pressureGap,
+    cur.sunshine,
+    cur.precip,
+
+    // 降水
+    precip30,
+    precip60,
+    precip180,
+    rainNow,
+    rainStarted30,
+    rainStopped30,
+
+    // 平均風
+    cur.wind,
+    cur.windEast,
+    cur.windNorth,
+    cur.calm,
+
+    // 最大瞬間風
+    cur.gust,
+    cur.gustEast,
+    cur.gustNorth,
+    gustExcess,
+    gustMax60,
+    gustMax180,
+
+    // 日照累積
+    sunshine30,
+    sunshine60,
+    sunshine180,
+
+    // 気温変化
     cur.temperature-l10.temperature,
     cur.temperature-l30.temperature,
     cur.temperature-l60.temperature,
     cur.temperature-l180.temperature,
     cur.temperature-l1440.temperature,
+
+    // 海面気圧変化
     cur.pressure-l30.pressure,
     cur.pressure-l60.pressure,
     cur.pressure-l180.pressure,
     cur.pressure-l1440.pressure,
+
+    // 現地気圧変化
+    cur.pressureLocal-l60.pressureLocal,
+    cur.pressureLocal-l180.pressureLocal,
+
+    // 湿度変化
     cur.humidity-l30.humidity,
     cur.humidity-l60.humidity,
     cur.humidity-l180.humidity,
+    cur.humidity-l1440.humidity,
+
+    // 風変化
     cur.wind-l30.wind,
     cur.wind-l60.wind,
-    Math.sin(ha),Math.cos(ha),
-    seasonSin,seasonCos
+    cur.wind-l180.wind,
+    cur.windEast-l60.windEast,
+    cur.windNorth-l60.windNorth,
+    cur.gust-l60.gust,
+
+    // 時刻・季節
+    Math.sin(ha),
+    Math.cos(ha),
+    seasonSin,
+    seasonCos
   ];
 
-  return x.every(Number.isFinite)?x:null;
+  const result=x.every(Number.isFinite) ? x : null;
+  featureCache.set(cacheKey,result);
+  return result;
 }
 
 function trainRidgeClosedForm(samples,lambda){
@@ -1358,9 +1610,15 @@ function getMissingFeatureLabels(cur,map){
     [1440,"24時間前"]
   ];
 
-  return checks
+  const missing=checks
     .filter(([m])=>!map.get(cur.ts-m*60*1000))
     .map(([,label])=>label);
+
+  if(!getWindowRows(map,cur.ts,30)) missing.push("直近30分の連続10分値");
+  if(!getWindowRows(map,cur.ts,60)) missing.push("直近1時間の連続10分値");
+  if(!getWindowRows(map,cur.ts,180)) missing.push("直近3時間の連続10分値");
+
+  return [...new Set(missing)];
 }
 
 function groupByStation(rows){const m=new Map();for(const r of rows){if(!m.has(r.station))m.set(r.station,[]);m.get(r.station).push(r)}return m}
@@ -1374,6 +1632,110 @@ function parseDateTime(date,time){
   return new Date(date+"T"+time+":00").getTime();
 }
 function toNumber(v){if(v==null||v===""||v==="--")return NaN;const n=Number(v);return Number.isFinite(n)?n:NaN}
+function toPrecipNumber(v){
+  // この元表では "--" / 空欄を降水なしとして0mm扱い
+  if(v==null||v===""||v==="--") return 0;
+  const n=Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+const WIND_DEGREES={
+  "北":0,
+  "北北東":22.5,
+  "北東":45,
+  "東北東":67.5,
+  "東":90,
+  "東南東":112.5,
+  "南東":135,
+  "南南東":157.5,
+  "南":180,
+  "南南西":202.5,
+  "南西":225,
+  "西南西":247.5,
+  "西":270,
+  "西北西":292.5,
+  "北西":315,
+  "北北西":337.5
+};
+
+function windVector(direction,speed){
+  if(direction==="静穏" || !direction || !Number.isFinite(speed)){
+    return {east:0,north:0,calm:direction==="静穏"?1:0};
+  }
+
+  const deg=WIND_DEGREES[direction];
+  if(!Number.isFinite(deg)){
+    return {east:0,north:0,calm:0};
+  }
+
+  const rad=deg*Math.PI/180;
+
+  // 気象風向は「その方向から吹いてくる」。
+  // ここでは方向情報を周期量として保持することが目的なので、
+  // 東西・南北成分へ変換して不連続(北359°/0°問題)を避ける。
+  return {
+    east:speed*Math.sin(rad),
+    north:speed*Math.cos(rad),
+    calm:0
+  };
+}
+
+function attachWindVectors(row){
+  const avg=windVector(row.windDirection,row.wind);
+  const gust=windVector(row.gustDirection,row.gust);
+
+  row.windEast=avg.east;
+  row.windNorth=avg.north;
+  row.calm=avg.calm;
+
+  row.gustEast=gust.east;
+  row.gustNorth=gust.north;
+
+  return row;
+}
+
+function getWindowRows(map,currentTs,minutes){
+  const count=Math.round(minutes/10);
+  const rows=[];
+
+  // 「直近30分」なら現在・10分前・20分前の3個を使用
+  for(let i=0;i<count;i++){
+    const row=map.get(currentTs-i*10*60*1000);
+    if(!row) return null;
+    rows.push(row);
+  }
+
+  return rows;
+}
+
+function sumField(rows,field){
+  return rows.reduce((sum,r)=>sum+(Number.isFinite(r[field])?r[field]:0),0);
+}
+
+function maxField(rows,field){
+  let v=-Infinity;
+  for(const r of rows){
+    if(Number.isFinite(r[field])) v=Math.max(v,r[field]);
+  }
+  return Number.isFinite(v)?v:0;
+}
+
+function hasStateTransition(rows,stateFn,fromState,toState){
+  // rowsは現在→過去の順。時系列順へ直して変化を見る。
+  const chronological=[...rows].reverse();
+
+  for(let i=1;i<chronological.length;i++){
+    const prev=stateFn(chronological[i-1]);
+    const cur=stateFn(chronological[i]);
+
+    if(prev===fromState && cur===toState){
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function normalizeNewlines(t){return t.replace(/\r\n/g,"\n").replace(/\r/g,"\n")}
 function safeFileName(t){return t.replace(/[\\/:*?"<>|]/g,"_").replace(/\s+/g,"_")}
 function formatDateTime(ts){const d=new Date(ts);return `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,"0")}/${String(d.getDate()).padStart(2,"0")} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`}
