@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Weather Forecast Lab v8.4</title>
+<title>Weather Forecast Lab v8.5</title>
 <style>
 :root{
   --bg:#0b1020;
@@ -138,10 +138,10 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
 <div class="wrap">
   <div class="hero">
     <div>
-      <h1>Weather Forecast Lab <span style="font-size:.38em;color:var(--muted)">v8.4</span></h1>
+      <h1>Weather Forecast Lab <span style="font-size:.38em;color:var(--muted)">v8.5</span></h1>
       <p>10分値を主軸に、1時間補助観測を時間リークなしで結合し、ΔTモデルを比較検証するブラウザ完結型ダッシュボード</p>
     </div>
-    <div class="badge">v8.4 / 雲量特殊記号 + 微量降水 + availability + A/B実験</div>
+    <div class="badge">v8.5 / exact高速化 + 降水診断 + 連続性監査 + A/B実験</div>
   </div>
 
   <div class="grid">
@@ -405,6 +405,7 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
           <option value="rainRisk180">降水risk・その後3時間</option>
         </select>
       </div>
+      <div id="multiMetricHelp" class="explain small" style="margin-top:8px"></div>
       <div class="chart-wrap"><canvas id="multiForecastChart" width="1250" height="390"></canvas></div>
 
       <h3>10分刻み総合タイムライン</h3>
@@ -598,10 +599,10 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
           予測対象期間が学習側へ食い込まないよう、予測時間ぶんの境界を空けています。<br><br>
           <b>日別walk-forward：</b>別ボタンで実行します。各日00:00時点までに判明している情報だけで再学習し、
           その日の未来を予測します。「1日＝1ケース」で集計するため、通常の10分刻みテストより独立性の高い補助評価になります。<br><br>
-          <b>実際の未来予測：</b>全利用可能データで再学習します。v8.4でも本番144モデルはv7系51特徴量ですが、降水raw/微量降水の意味論をv8.4で修正しています。ただし比較基準は現在値固定だけでなく前日同時刻も候補にし、学習側だけで選びます。<br><br>
+          <b>実際の未来予測：</b>全利用可能データで再学習します。v8.5でも本番144モデルはv7系51特徴量ですが、降水raw/微量降水の意味論をv8.4で修正しています。ただし比較基準は現在値固定だけでなく前日同時刻も候補にし、学習側だけで選びます。<br><br>
           <b>1時間補助観測：</b>raw → normalized → features を分離し、各値の時間意味論と availability を管理します。
           補助情報はまず代表8 horizonの実験モデルだけへ投入し、本番へ自動昇格させません。<br>
-        <b>v8.4特殊表記：</b>雲量 <code>0+</code> は代表値0.5、<code>10-</code> は代表値9.5としてモデルへ渡しますが、raw記号と特殊表記フラグを残します。
+        <b>v8.5特殊表記：</b>雲量 <code>0+</code> は代表値0.5、<code>10-</code> は代表値9.5としてモデルへ渡しますが、raw記号と特殊表記フラグを残します。
         降水量 <code>0.0</code> は累積量を水増しせず0mmのまま、降水現象フラグだけ1として扱います。<br><br>
           <b>総合10分刻み予報：</b>別ボタンで、湿度・海面気圧・平均風速・最大瞬間風速を
           10分後～24時間後まで144点直接予測し、各変数は学習側だけで選んだ「現在値固定 / 前日同時刻」と比較して採用します。
@@ -624,7 +625,7 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
         風向は16方位を東西/南北ベクトルへ変換、最大瞬間風は突風増幅量と1時間/3時間最大値、
         日照は30分/1時間/3時間累積、気温・気圧・湿度・風速は複数時間差を使用します。<br><br>
         <b>本番特徴量数：</b><span id="featureCountText"></span><br><br>
-        <b>v8.4実験候補：</b>全天日射量（最新・age・3時間累積・availability）、
+        <b>v8.5実験候補：</b>全天日射量（最新・age・3時間累積・availability）、
         雲量（最新・age・availability）。露点・蒸気圧・視程・天気はnormalized層へ保存しますが、
         初期A/Bではまだ投入しません。
       </div>
@@ -735,7 +736,7 @@ const FEATURE_NAMES = [
 ];
 
 
-const PARSER_VERSION = "8.4.0";
+const PARSER_VERSION = "8.5.0";
 
 // 1時間値のうち、v8.4 A/Bで使う特徴群。
 // raw/normalized層では露点・蒸気圧・視程・天気等も保持する。
@@ -795,6 +796,9 @@ let useSeasonFeatures = false;
 let featureCache = new Map();
 let stationContextCache = null;
 let latestFeatureCache = null;
+let baseSampleCache = new Map();
+let denseRidgeCache = null;
+let perfCounters = null;
 let walkForwardResults = new Map();
 
 // v8.4: 1時間補助観測は10分値とは別レイヤー
@@ -804,6 +808,9 @@ let currentHourlyTsv = "";
 let globalHourlyRows = [];
 let hourlyDiagnostics = [];
 let hourlyContextCache = new Map();
+let auxFeatureCache = new Map();
+let auxFeatureCacheHits = 0;
+let auxFeatureCacheMisses = 0;
 let hourlyDuplicateCount = 0;
 let hourlyDuplicateConflictCount = 0;
 let auxAblationResults = [];
@@ -845,6 +852,9 @@ $("hourlyRaw").addEventListener("input", () => {
 $("hourlyAvailabilityLag").addEventListener("input", () => {
   auxAblationResults=[];
   auxWalkForwardResults=[];
+  auxFeatureCache=new Map();
+  auxFeatureCacheHits=0;
+  auxFeatureCacheMisses=0;
   $("auxExperimentStatus").textContent=
     "availability lagが変更されました。未確認の過去1時間TSVにもこのlagを解析時に再適用します。通常実行/A-B検証を再実行してください。";
 });
@@ -1050,7 +1060,10 @@ $("walkForwardBtn").addEventListener("click", runWalkForward);
 $("runAuxAblation").addEventListener("click", runAuxAblation);
 $("runAuxWalkForward").addEventListener("click", runAuxWalkForward);
 $("runMultiForecast").addEventListener("click", runMultiForecast);
-$("multiMetricSelect").addEventListener("change", drawMultiForecastChart);
+$("multiMetricSelect").addEventListener("change", () => {
+  drawMultiForecastChart();
+  renderMultiMetricHelp();
+});
 $("walkForwardHorizon").addEventListener("change", renderWalkForwardDetail);
 $("backtestHorizon").addEventListener("change", renderSelectedBacktest);
 $("explainHorizon").addEventListener("change", renderExplanation);
@@ -1572,6 +1585,9 @@ function inspectHourlySource(fileName,text){
 
 function prepareHourlyContext(rows){
   hourlyContextCache=new Map();
+  auxFeatureCache=new Map();
+  auxFeatureCacheHits=0;
+  auxFeatureCacheMisses=0;
 
   for(const [station,stationRows0] of groupByStation(rows).entries()){
     hourlyContextCache.set(station,[...stationRows0].sort((a,b)=>a.ts-b.ts));
@@ -1665,6 +1681,16 @@ function findLatestHourlyObservation(station,originTs,field,rawField,audit=null)
 }
 
 function buildAuxFeatureAt(station,originTs,variantId,audit=null){
+  // 同じ起点の補助特徴はhorizonごとに何度も再利用される。
+  // audit無しの通常学習では完全同一結果をcacheし、1時間行の再走査・sortを繰り返さない。
+  // availability policy変更時/補助データ再読込時にはcacheを破棄する。
+  const cacheKey=!audit ? `${station}|${originTs}|${variantId}|lag=${getHourlyAvailabilityLag()}` : null;
+  if(cacheKey && auxFeatureCache.has(cacheKey)){
+    auxFeatureCacheHits++;
+    return auxFeatureCache.get(cacheKey);
+  }
+  if(cacheKey) auxFeatureCacheMisses++;
+
   const v=AUX_VARIANTS.find(x=>x.id===variantId) || AUX_VARIANTS[0];
   const x=[];
   const names=[];
@@ -1778,7 +1804,9 @@ function buildAuxFeatureAt(station,originTs,variantId,audit=null){
     names.push(...AUX_FEATURE_NAMES.cloud);
   }
 
-  return {x,names,meta};
+  const result={x,names,meta};
+  if(cacheKey) auxFeatureCache.set(cacheKey,result);
+  return result;
 }
 
 function renderHourlyDiagnostics(){
@@ -1996,6 +2024,7 @@ async function runAll(){
 
       useSeasonFeatures = countDays(globalRows) >= 90;
       featureCache = new Map();
+      perfCounters=newPerfCounters();
       prepareRunCaches(globalRows);
 
       // ---- 1時間補助値 ----
@@ -2045,8 +2074,9 @@ async function runAll(){
       renderDataSummary(globalRows);
       renderHourlyDiagnostics();
 
-      // ---- 本番51特徴量：AI本体はv7互換。baseline評価はv8.4でも強化版 ----
+      // ---- 本番51特徴量：AI本体はv7互換。baseline評価はv8.5でも強化版 ----
       modelResults=new Map();
+      const trainingStart=performance.now();
 
       for(let i=0;i<ALL_HORIZONS.length;i++){
         const h=ALL_HORIZONS[i];
@@ -2059,6 +2089,8 @@ async function runAll(){
         const result=trainForHorizon(globalRows,h.steps);
         modelResults.set(h.steps,result);
       }
+      const trainingDone=performance.now();
+      const renderStart=performance.now();
 
       renderMetrics();
       renderForecastCards();
@@ -2066,8 +2098,15 @@ async function runAll(){
       renderDenseForecastTable();
       renderSelectedBacktest();
       renderExplanation();
+      const renderDone=performance.now();
 
-      const elapsed=(performance.now()-started)/1000;
+      const elapsed=(renderDone-started)/1000;
+      const trainingSec=(trainingDone-trainingStart)/1000;
+      const renderSec=(renderDone-renderStart)/1000;
+      const preprocessSec=Math.max(0,elapsed-trainingSec-renderSec);
+      const exact=denseRidgeCache ? "ON" : "OFF（従来計算へfallback）";
+      const mem=denseRidgeCache ? `${(denseRidgeCache.estimatedBytes/1024/1024).toFixed(1)}MB` : "0MB";
+      const denseMode=denseRidgeCache?.mode||"-";
 
       $("runStatus").textContent =
         `完了：10分 ${stagedFiles.length}過去TSV${currentIncluded ? " + 今日入力" : ""}`+
@@ -2076,7 +2115,8 @@ async function runAll(){
         `1時間補助 ${globalHourlyRows.length.toLocaleString()}行 / ${countDays(globalHourlyRows)}日\n`+
         `本番モデル 144本 / 本番特徴量 ${FEATURE_NAMES.length}個 / 51特徴量構造はv7系（降水raw/微量降水の意味論はv8.4で保持） / 基準予報は強化版\n`+
         `10分availability 0分lag（v7互換・未確認） / 季節特徴 ${useSeasonFeatures ? "ON" : "OFF（90日未満）"}\n`+
-        `通常計算時間 ${elapsed.toFixed(2)}秒`;
+        `通常計算時間 ${elapsed.toFixed(2)}秒（前処理 ${preprocessSec.toFixed(2)} / 144モデル ${trainingSec.toFixed(2)} / 描画 ${renderSec.toFixed(2)}秒）\n`+
+        `exact高速path ${exact} (${denseMode}) / prefix統計メモリ ${mem} / 高速single fit ${perfCounters.denseSingleFits}回 / fallback ${perfCounters.fallbackSingleFits}回`;
     }catch(e){
       $("runStatus").textContent="エラー\n"+e.message;
     }
@@ -2360,8 +2400,9 @@ function trainForHorizon(rows,steps){
   // baseline方式はテストを見ず、学習側だけで決定。
   const baselineMethod=selectBaselineMethodFromTrain(train);
 
-  // 評価用ΔTモデル
-  const evalModel=trainRidgeClosedForm(train,0.8);
+  // v8.5: 評価fitと全量fitを同じ十分統計量走査で同時に作る（exact）。
+  const pair=trainRidgePair(train,samples,0.8);
+  const evalModel=pair.evalModel;
 
   // AI未来気温 = 現在気温 + AIが予測したΔT
   const testDeltaPred=test.map(s=>predictModel(evalModel,s.x));
@@ -2394,8 +2435,8 @@ function trainForHorizon(rows,steps){
     };
   }
 
-  // 本番予測は全教師データで再学習
-  const finalModel=trainRidgeClosedForm(samples,0.8);
+  // 本番予測は全教師データ。pair内で同じ全サンプルから学習済み。
+  const finalModel=pair.finalModel;
 
   const forecastDelta=predictModel(finalModel,latest.x);
   const forecast=latest.currentTemp+forecastDelta;
@@ -2452,21 +2493,57 @@ function trainForHorizon(rows,steps){
 }
 
 
+function newPerfCounters(){
+  return {
+    denseSingleFits:0,
+    denseMultiFits:0,
+    fallbackSingleFits:0,
+    fallbackMultiFits:0,
+    denseCacheBuildMs:0
+  };
+}
+
 function prepareRunCaches(rows){
   stationContextCache=new Map();
+  baseSampleCache=new Map();
+  denseRidgeCache=null;
 
   for(const [station,stationRows0] of groupByStation(rows).entries()){
     const stationRows=[...stationRows0].sort((a,b)=>a.ts-b.ts);
+    const map=new Map();
+    const indexByTs=new Map();
+    const rainPrefix=new Int32Array(stationRows.length+1);
+    let dense10m=true;
+
+    for(let i=0;i<stationRows.length;i++){
+      const r=stationRows[i];
+      map.set(r.ts,r);
+      indexByTs.set(r.ts,i);
+      rainPrefix[i+1]=rainPrefix[i]+(isRainOccurrenceRow(r)?1:0);
+      if(i>0 && r.ts-stationRows[i-1].ts!==10*60000) dense10m=false;
+    }
+
     stationContextCache.set(station,{
+      station,
       rows:stationRows,
-      map:new Map(stationRows.map(r=>[r.ts,r]))
+      map,
+      indexByTs,
+      rainPrefix,
+      dense10m
     });
   }
 
   latestFeatureCache=null;
 
+  // v8.5 exact高速化：51特徴量が連続10分データなら、X'Xの素材を1回だけprefix化する。
+  // 予測式・教師値・lambdaは変更しない。条件を満たさない場合は従来計算へ自動fallback。
+  const denseStart=performance.now();
+  prepareDenseRidgeCache();
+  const denseMs=performance.now()-denseStart;
+  if(perfCounters) perfCounters.denseCacheBuildMs+=denseMs;
+
   if(rows.length){
-    const latest=[...rows].sort((a,b)=>a.ts-b.ts).at(-1);
+    const latest=rows[rows.length-1];
     const ctx=stationContextCache.get(latest.station);
 
     if(ctx){
@@ -2489,19 +2566,463 @@ function prepareRunCaches(rows){
   }
 }
 
-function buildSamples(rows,steps){
-  const out=[];
+function prepareDenseRidgeCache(){
+  denseRidgeCache=null;
+  if(!stationContextCache || stationContextCache.size!==1) return;
 
+  const ctx=[...stationContextCache.values()][0];
+  if(!ctx.dense10m || !ctx.rows.length) return;
+
+  const n=ctx.rows.length;
+  const p=FEATURE_NAMES.length;
+  const features=new Array(n);
+  let firstValid=-1;
+
+  for(let i=0;i<n;i++){
+    const x=makeFeature(ctx.rows[i],ctx.map);
+    features[i]=x;
+    if(x && firstValid<0) firstValid=i;
+  }
+
+  if(firstValid<0) return;
+  for(let i=firstValid;i<n;i++) if(!features[i]) return;
+
+  const triOffsets=new Int32Array(p);
+  let triCount=0;
+  for(let j=0;j<p;j++){
+    triOffsets[j]=triCount;
+    triCount+=p-j;
+  }
+
+  const ref=Float64Array.from(features[firstValid]);
+  const dMatrix=new Float64Array(n*p);
+  const d=new Float64Array(p);
+
+  // 20～40日程度なら全行prefixが最速。長期蓄積ではメモリ爆発を避けるため
+  // 1日(144行)ブロックprefixへ自動移行する。どちらもexactで、近似はしない。
+  const fullPrefixBytes=(n+1)*(p+triCount)*8;
+  const FULL_PREFIX_LIMIT=64*1024*1024;
+  const mode=fullPrefixBytes<=FULL_PREFIX_LIMIT ? "full" : "block";
+
+  let prefixD=null,prefixDD=null;
+  let blockPrefixD=null,blockPrefixDD=null,blockSize=144,fullBlocks=0;
+
+  if(mode==="full"){
+    prefixD=new Float64Array((n+1)*p);
+    prefixDD=new Float64Array((n+1)*triCount);
+
+    for(let i=0;i<n;i++){
+      const prevD=i*p,nextD=(i+1)*p;
+      prefixD.set(prefixD.subarray(prevD,prevD+p),nextD);
+      const prevDD=i*triCount,nextDD=(i+1)*triCount;
+      prefixDD.set(prefixDD.subarray(prevDD,prevDD+triCount),nextDD);
+
+      const x=features[i];
+      if(!x) continue;
+      const dBase=i*p;
+      for(let j=0;j<p;j++){
+        const v=x[j]-ref[j];
+        d[j]=v;
+        dMatrix[dBase+j]=v;
+        prefixD[nextD+j]+=v;
+      }
+      for(let j=0;j<p;j++){
+        const off=nextDD+triOffsets[j],dj=d[j];
+        for(let k=j;k<p;k++) prefixDD[off+(k-j)]+=dj*d[k];
+      }
+    }
+  }else{
+    fullBlocks=Math.floor(n/blockSize);
+    blockPrefixD=new Float64Array((fullBlocks+1)*p);
+    blockPrefixDD=new Float64Array((fullBlocks+1)*triCount);
+    const runningD=new Float64Array(p);
+    const runningDD=new Float64Array(triCount);
+
+    for(let i=0;i<n;i++){
+      const x=features[i];
+      if(x){
+        const dBase=i*p;
+        for(let j=0;j<p;j++){
+          const v=x[j]-ref[j];
+          d[j]=v;
+          dMatrix[dBase+j]=v;
+          runningD[j]+=v;
+        }
+        for(let j=0;j<p;j++){
+          const off=triOffsets[j],dj=d[j];
+          for(let k=j;k<p;k++) runningDD[off+(k-j)]+=dj*d[k];
+        }
+      }
+
+      const boundary=i+1;
+      if(boundary%blockSize===0 && boundary/blockSize<=fullBlocks){
+        const b=boundary/blockSize;
+        blockPrefixD.set(runningD,b*p);
+        blockPrefixDD.set(runningDD,b*triCount);
+      }
+    }
+  }
+
+  const estimatedBytes=
+    dMatrix.byteLength+ref.byteLength+
+    (prefixD?.byteLength||0)+(prefixDD?.byteLength||0)+
+    (blockPrefixD?.byteLength||0)+(blockPrefixDD?.byteLength||0);
+
+  denseRidgeCache={
+    station:ctx.station,ctx,n,p,features,firstValid,ref,dMatrix,triOffsets,triCount,
+    mode,prefixD,prefixDD,blockPrefixD,blockPrefixDD,blockSize,fullBlocks,
+    estimatedBytes,fullPrefixBytes
+  };
+}
+
+function denseSampleRange(samples){
+  const c=denseRidgeCache;
+  if(!c || !samples?.length) return null;
+  if(samples[0].x?.length!==c.p) return null;
+  if(samples[0].station!==c.station || samples.at(-1).station!==c.station) return null;
+
+  const start=c.ctx.indexByTs.get(samples[0].ts);
+  const last=c.ctx.indexByTs.get(samples.at(-1).ts);
+  if(start==null || last==null || last-start+1!==samples.length) return null;
+
+  if(samples.length>2){
+    const mid=(samples.length/2)|0;
+    if(c.ctx.indexByTs.get(samples[mid].ts)!==start+mid) return null;
+  }
+
+  return {start,end:last+1};
+}
+
+function addDenseRowToSums(sumD,sumDD,rowIndex){
+  const c=denseRidgeCache;
+  const p=c.p,base=rowIndex*p;
+  for(let j=0;j<p;j++) sumD[j]+=c.dMatrix[base+j];
+  for(let j=0;j<p;j++){
+    const off=c.triOffsets[j],dj=c.dMatrix[base+j];
+    for(let k=j;k<p;k++) sumDD[off+(k-j)]+=dj*c.dMatrix[base+k];
+  }
+}
+
+function denseRangeRawSums(start,end){
+  const c=denseRidgeCache;
+  const {p,triCount}=c;
+  const sumD=new Float64Array(p);
+  const sumDD=new Float64Array(triCount);
+
+  if(c.mode==="full"){
+    const startD=start*p,endD=end*p;
+    const startDD=start*triCount,endDD=end*triCount;
+    for(let j=0;j<p;j++) sumD[j]=c.prefixD[endD+j]-c.prefixD[startD+j];
+    for(let t=0;t<triCount;t++) sumDD[t]=c.prefixDD[endDD+t]-c.prefixDD[startDD+t];
+    return {sumD,sumDD};
+  }
+
+  const B=c.blockSize;
+  const firstFull=Math.ceil(start/B);
+  const lastFullExclusive=Math.floor(end/B);
+  const leftEnd=Math.min(end,firstFull*B);
+
+  for(let i=start;i<leftEnd;i++) addDenseRowToSums(sumD,sumDD,i);
+
+  if(firstFull<lastFullExclusive){
+    const aD=firstFull*p,bD=lastFullExclusive*p;
+    const aDD=firstFull*triCount,bDD=lastFullExclusive*triCount;
+    for(let j=0;j<p;j++) sumD[j]+=c.blockPrefixD[bD+j]-c.blockPrefixD[aD+j];
+    for(let t=0;t<triCount;t++) sumDD[t]+=c.blockPrefixDD[bDD+t]-c.blockPrefixDD[aDD+t];
+  }
+
+  const rightStart=Math.max(leftEnd,lastFullExclusive*B);
+  for(let i=rightStart;i<end;i++) addDenseRowToSums(sumD,sumDD,i);
+  return {sumD,sumDD};
+}
+
+function denseXStats(start,end,lambda){
+  const c=denseRidgeCache;
+  const {p,ref,triOffsets}=c;
+  const n=end-start;
+  if(n<=0) return null;
+
+  const {sumD,sumDD}=denseRangeRawSums(start,end);
+  const xMean=Array(p).fill(0);
+  const xStd=Array(p).fill(1);
+
+  for(let j=0;j<p;j++) xMean[j]=ref[j]+sumD[j]/n;
+
+  for(let j=0;j<p;j++){
+    const sumSq=sumDD[triOffsets[j]];
+    const centered=Math.max(0,sumSq-sumD[j]*sumD[j]/n);
+    const sd=Math.sqrt(centered/n);
+    xStd[j]=sd<1e-9 ? 1 : sd;
+  }
+
+  const A=Array.from({length:p},()=>Array(p).fill(0));
+  for(let j=0;j<p;j++){
+    const off=triOffsets[j];
+    for(let k=j;k<p;k++){
+      const raw=sumDD[off+(k-j)];
+      const centered=raw-sumD[j]*sumD[k]/n;
+      const v=centered/(xStd[j]*xStd[k]);
+      A[j][k]=v;
+      A[k][j]=v;
+    }
+    A[j][j]+=lambda*n;
+  }
+
+  return {n,sumD,xMean,xStd,A};
+}
+
+function trainDenseSingle(samples,lambda){
+  const range=denseSampleRange(samples);
+  if(!range) return null;
+
+  const c=denseRidgeCache;
+  const xs=denseXStats(range.start,range.end,lambda);
+  if(!xs) return null;
+
+  const {n,sumD,xMean,xStd,A}=xs;
+  const p=c.p;
+  let sumY=0,sumY2=0;
+  const sumDY=new Float64Array(p);
+
+  for(let i=0;i<n;i++){
+    const y=samples[i].y;
+    if(!Number.isFinite(y)) return null;
+    sumY+=y;
+    sumY2+=y*y;
+    const dBase=(range.start+i)*p;
+    for(let j=0;j<p;j++) sumDY[j]+=c.dMatrix[dBase+j]*y;
+  }
+
+  const yMean=sumY/n;
+  let yStd=Math.sqrt(Math.max(0,(sumY2-sumY*sumY/n)/n));
+  if(yStd<1e-9) yStd=1;
+
+  const b=Array(p).fill(0);
+  for(let j=0;j<p;j++){
+    const cov=sumDY[j]-sumD[j]*sumY/n;
+    b[j]=cov/(xStd[j]*yStd);
+  }
+
+  const weights=solveSpdCholesky(A,b) || solveLinearSystem(A,b);
+  return {weights,xMean,xStd,yMean,yStd,fastExact:true};
+}
+
+function trainDenseMulti(samples,lambda){
+  const range=denseSampleRange(samples);
+  if(!range) return null;
+
+  const c=denseRidgeCache;
+  const xs=denseXStats(range.start,range.end,lambda);
+  if(!xs) return null;
+
+  const {n,sumD,xMean,xStd,A}=xs;
+  const p=c.p;
+  const q=samples[0].y?.length||0;
+  if(!q) return null;
+
+  const sumY=new Float64Array(q);
+  const sumY2=new Float64Array(q);
+  const sumDY=new Float64Array(p*q);
+
+  for(let i=0;i<n;i++){
+    const ys=samples[i].y;
+    if(!ys || ys.length!==q) return null;
+    for(let k=0;k<q;k++){
+      const y=ys[k];
+      if(!Number.isFinite(y)) return null;
+      sumY[k]+=y;
+      sumY2[k]+=y*y;
+    }
+    const dBase=(range.start+i)*p;
+    for(let j=0;j<p;j++){
+      const dj=c.dMatrix[dBase+j];
+      const bo=j*q;
+      for(let k=0;k<q;k++) sumDY[bo+k]+=dj*ys[k];
+    }
+  }
+
+  const yMean=Array(q).fill(0),yStd=Array(q).fill(1);
+  for(let k=0;k<q;k++){
+    yMean[k]=sumY[k]/n;
+    const sd=Math.sqrt(Math.max(0,(sumY2[k]-sumY[k]*sumY[k]/n)/n));
+    yStd[k]=sd<1e-9 ? 1 : sd;
+  }
+
+  const B=Array.from({length:p},()=>Array(q).fill(0));
+  for(let j=0;j<p;j++){
+    const bo=j*q;
+    for(let k=0;k<q;k++){
+      const cov=sumDY[bo+k]-sumD[j]*sumY[k]/n;
+      B[j][k]=cov/(xStd[j]*yStd[k]);
+    }
+  }
+
+  const W=solveSpdCholeskyMulti(A,B) || solveLinearSystemMulti(A,B);
+  return {xMean,xStd,yMean,yStd,W,fastExact:true};
+}
+
+function denseSingleModelFromStats(xs,sumY,sumY2,sumDY){
+  const c=denseRidgeCache;
+  const {n,sumD,xMean,xStd,A}=xs;
+  const p=c.p;
+  const yMean=sumY/n;
+  let yStd=Math.sqrt(Math.max(0,(sumY2-sumY*sumY/n)/n));
+  if(yStd<1e-9) yStd=1;
+  const b=Array(p).fill(0);
+  for(let j=0;j<p;j++){
+    const cov=sumDY[j]-sumD[j]*sumY/n;
+    b[j]=cov/(xStd[j]*yStd);
+  }
+  const weights=solveSpdCholesky(A,b) || solveLinearSystem(A,b);
+  return {weights,xMean,xStd,yMean,yStd,fastExact:true};
+}
+
+function trainDenseSinglePair(train,full,lambda){
+  const rt=denseSampleRange(train),rf=denseSampleRange(full);
+  if(!rt||!rf||rt.start!==rf.start||rt.end>rf.end||train.length>full.length) return null;
+  if(train.length && full[train.length-1]?.ts!==train.at(-1)?.ts) return null;
+
+  const c=denseRidgeCache,p=c.p;
+  const xTrain=denseXStats(rt.start,rt.end,lambda);
+  const xFull=denseXStats(rf.start,rf.end,lambda);
+  if(!xTrain||!xFull) return null;
+
+  let sumY=0,sumY2=0;
+  const sumDY=new Float64Array(p);
+  let trainSnapshot=null;
+
+  for(let i=0;i<full.length;i++){
+    const y=full[i].y;
+    if(!Number.isFinite(y)) return null;
+    sumY+=y; sumY2+=y*y;
+    const dBase=(rf.start+i)*p;
+    for(let j=0;j<p;j++) sumDY[j]+=c.dMatrix[dBase+j]*y;
+
+    if(i+1===train.length){
+      trainSnapshot={sumY,sumY2,sumDY:Float64Array.from(sumDY)};
+    }
+  }
+  if(!trainSnapshot) return null;
+
+  return {
+    evalModel:denseSingleModelFromStats(xTrain,trainSnapshot.sumY,trainSnapshot.sumY2,trainSnapshot.sumDY),
+    finalModel:denseSingleModelFromStats(xFull,sumY,sumY2,sumDY),
+    fastExact:true
+  };
+}
+
+function denseMultiModelFromStats(xs,sumY,sumY2,sumDY,q){
+  const c=denseRidgeCache;
+  const {n,sumD,xMean,xStd,A}=xs;
+  const p=c.p;
+  const yMean=Array(q).fill(0),yStd=Array(q).fill(1);
+  for(let k=0;k<q;k++){
+    yMean[k]=sumY[k]/n;
+    const sd=Math.sqrt(Math.max(0,(sumY2[k]-sumY[k]*sumY[k]/n)/n));
+    yStd[k]=sd<1e-9?1:sd;
+  }
+  const B=Array.from({length:p},()=>Array(q).fill(0));
+  for(let j=0;j<p;j++){
+    const bo=j*q;
+    for(let k=0;k<q;k++){
+      const cov=sumDY[bo+k]-sumD[j]*sumY[k]/n;
+      B[j][k]=cov/(xStd[j]*yStd[k]);
+    }
+  }
+  const W=solveSpdCholeskyMulti(A,B) || solveLinearSystemMulti(A,B);
+  return {xMean,xStd,yMean,yStd,W,fastExact:true};
+}
+
+function trainDenseMultiPair(train,full,lambda){
+  const rt=denseSampleRange(train),rf=denseSampleRange(full);
+  if(!rt||!rf||rt.start!==rf.start||rt.end>rf.end||train.length>full.length) return null;
+  if(train.length && full[train.length-1]?.ts!==train.at(-1)?.ts) return null;
+
+  const c=denseRidgeCache,p=c.p,q=full[0]?.y?.length||0;
+  if(!q) return null;
+  const xTrain=denseXStats(rt.start,rt.end,lambda);
+  const xFull=denseXStats(rf.start,rf.end,lambda);
+  if(!xTrain||!xFull) return null;
+
+  const sumY=new Float64Array(q),sumY2=new Float64Array(q),sumDY=new Float64Array(p*q);
+  let trainSnapshot=null;
+
+  for(let i=0;i<full.length;i++){
+    const ys=full[i].y;
+    if(!ys||ys.length!==q) return null;
+    for(let k=0;k<q;k++){
+      const y=ys[k];
+      if(!Number.isFinite(y)) return null;
+      sumY[k]+=y; sumY2[k]+=y*y;
+    }
+    const dBase=(rf.start+i)*p;
+    for(let j=0;j<p;j++){
+      const dj=c.dMatrix[dBase+j],bo=j*q;
+      for(let k=0;k<q;k++) sumDY[bo+k]+=dj*ys[k];
+    }
+    if(i+1===train.length){
+      trainSnapshot={
+        sumY:Float64Array.from(sumY),
+        sumY2:Float64Array.from(sumY2),
+        sumDY:Float64Array.from(sumDY)
+      };
+    }
+  }
+  if(!trainSnapshot) return null;
+
+  return {
+    evalModel:denseMultiModelFromStats(xTrain,trainSnapshot.sumY,trainSnapshot.sumY2,trainSnapshot.sumDY,q),
+    finalModel:denseMultiModelFromStats(xFull,sumY,sumY2,sumDY,q),
+    fastExact:true
+  };
+}
+
+function trainRidgePair(train,full,lambda){
+  const fast=trainDenseSinglePair(train,full,lambda);
+  if(fast){
+    if(perfCounters) perfCounters.denseSingleFits+=2;
+    return fast;
+  }
+  if(perfCounters) perfCounters.fallbackSingleFits+=2;
+  return {
+    evalModel:trainRidgeClosedFormLegacy(train,lambda),
+    finalModel:trainRidgeClosedFormLegacy(full,lambda),
+    fastExact:false
+  };
+}
+
+function trainMultiTargetPair(train,full,lambda){
+  const fast=trainDenseMultiPair(train,full,lambda);
+  if(fast){
+    if(perfCounters) perfCounters.denseMultiFits+=2;
+    return fast;
+  }
+  if(perfCounters) perfCounters.fallbackMultiFits+=2;
+  return {
+    evalModel:trainMultiTargetRidgeLegacy(train,lambda),
+    finalModel:trainMultiTargetRidgeLegacy(full,lambda),
+    fastExact:false
+  };
+}
+
+function buildSamples(rows,steps){
+  if(rows===globalRows && baseSampleCache.has(steps)){
+    return baseSampleCache.get(steps);
+  }
+
+  const out=[];
   let contexts;
 
   if(rows===globalRows && stationContextCache){
     contexts=[...stationContextCache.values()];
   }else{
-    contexts=[...groupByStation(rows).values()].map(stationRows0=>{
+    contexts=[...groupByStation(rows).entries()].map(([station,stationRows0])=>{
       const stationRows=[...stationRows0].sort((a,b)=>a.ts-b.ts);
       return {
+        station,
         rows:stationRows,
-        map:new Map(stationRows.map(r=>[r.ts,r]))
+        map:new Map(stationRows.map(r=>[r.ts,r])),
+        dense10m:stationRows.every((r,i)=>i===0||r.ts-stationRows[i-1].ts===10*60000)
       };
     });
   }
@@ -2510,16 +3031,33 @@ function buildSamples(rows,steps){
     const stationRows=ctx.rows;
     const map=ctx.map;
 
-    for(const cur of stationRows){
+    for(let ci=0;ci<stationRows.length;ci++){
+      const cur=stationRows[ci];
       const f=makeFeature(cur,map);
-      const target=map.get(cur.ts+steps*10*60*1000);
+      let target=null,targetIndex=-1;
+
+      if(ctx.dense10m && ci+steps<stationRows.length){
+        const candidate=stationRows[ci+steps];
+        if(candidate.ts===cur.ts+steps*10*60000){
+          target=candidate;
+          targetIndex=ci+steps;
+        }
+      }
+      if(!target){
+        target=map.get(cur.ts+steps*10*60000);
+        if(target && ctx.indexByTs) targetIndex=ctx.indexByTs.get(target.ts) ?? -1;
+      }
 
       if(!f||!target) continue;
 
       const targetTemp=target.temperature;
       const deltaTemp=targetTemp-cur.temperature;
-
-      const sameClockYesterday=map.get(target.ts-24*60*60*1000);
+      let sameClockYesterday=null;
+      if(targetIndex>=144 && ctx.dense10m){
+        const candidate=stationRows[targetIndex-144];
+        if(candidate?.ts===target.ts-24*60*60*1000) sameClockYesterday=candidate;
+      }
+      if(!sameClockYesterday) sameClockYesterday=map.get(target.ts-24*60*60*1000);
 
       out.push({
         x:f,
@@ -2532,12 +3070,18 @@ function buildSamples(rows,steps){
           : NaN,
         station:cur.station,
         ts:cur.ts,
-        targetTs:target.ts
+        targetTs:target.ts,
+        curRow:cur,
+        targetRow:target,
+        curIndex:ci,
+        targetIndex
       });
     }
   }
 
-  return out.sort((a,b)=>a.ts-b.ts);
+  const sorted=out.sort((a,b)=>a.ts-b.ts);
+  if(rows===globalRows) baseSampleCache.set(steps,sorted);
+  return sorted;
 }
 
 function buildLatestFeature(rows){
@@ -2731,6 +3275,16 @@ function makeFeature(cur,map){
 }
 
 function trainRidgeClosedForm(samples,lambda){
+  const fast=trainDenseSingle(samples,lambda);
+  if(fast){
+    if(perfCounters) perfCounters.denseSingleFits++;
+    return fast;
+  }
+  if(perfCounters) perfCounters.fallbackSingleFits++;
+  return trainRidgeClosedFormLegacy(samples,lambda);
+}
+
+function trainRidgeClosedFormLegacy(samples,lambda){
   const X=samples.map(s=>s.x), y=samples.map(s=>s.y), p=X[0].length, n=X.length;
 
   const xMean=Array(p).fill(0);
@@ -2798,7 +3352,7 @@ function trainRidgeClosedForm(samples,lambda){
     A[j][j]+=lambda*n;
   }
 
-  const weights=solveLinearSystem(A,b);
+  const weights=solveSpdCholesky(A,b) || solveLinearSystem(A,b);
 
   return {weights,xMean,xStd,yMean,yStd};
 }
@@ -2897,11 +3451,144 @@ function trainRidgeClosedFormMissing(samples,lambda){
   }
 
   return {
-    weights:solveLinearSystem(A,b),
+    weights:solveSpdCholesky(A,b) || solveLinearSystem(A,b),
     xMean,xStd,yMean,yStd,
     finiteCounts:counts,
     missingAware:true
   };
+}
+
+
+
+// walk-forward専用のexact累積Ridge統計。
+// 各起点で過去samplesをゼロから再走査せず、前起点から増えた行だけを追加する。
+// trainRidgeClosedFormMissingと同じ「train平均補完→標準化→Ridge」を、
+// 数値安定性のため各特徴の最初の有限値をreferenceにして十分統計から再構成する。
+function createMissingRidgeAccumulator(p,lambda){
+  const triOffsets=new Int32Array(p);
+  let triCount=0;
+  for(let j=0;j<p;j++){
+    triOffsets[j]=triCount;
+    triCount+=p-j;
+  }
+
+  const ref=new Float64Array(p);
+  const refSet=new Uint8Array(p);
+  const count=new Float64Array(p);
+  const sumD=new Float64Array(p);
+  const sumD2=new Float64Array(p);
+  const sumDyFinite=new Float64Array(p);
+  const sumDDy=new Float64Array(p);
+
+  const pairCount=new Float64Array(triCount);
+  const pairSumJ=new Float64Array(triCount);
+  const pairSumK=new Float64Array(triCount);
+  const pairProd=new Float64Array(triCount);
+
+  let n=0;
+  let yRef=0;
+  let yRefSet=false;
+  let sumDy=0;
+  let sumDy2=0;
+
+  const finiteIdx=new Int32Array(p);
+  const dVals=new Float64Array(p);
+
+  function add(sample){
+    const x=sample.x;
+    const y=sample.y;
+    if(!yRefSet){yRef=y;yRefSet=true;}
+    const dy=y-yRef;
+    n++;
+    sumDy+=dy;
+    sumDy2+=dy*dy;
+
+    let m=0;
+    for(let j=0;j<p;j++){
+      const raw=x[j];
+      if(!Number.isFinite(raw)) continue;
+      if(!refSet[j]){ref[j]=raw;refSet[j]=1;}
+      const d=raw-ref[j];
+      finiteIdx[m++]=j;
+      dVals[j]=d;
+      count[j]++;
+      sumD[j]+=d;
+      sumD2[j]+=d*d;
+      sumDyFinite[j]+=dy;
+      sumDDy[j]+=d*dy;
+    }
+
+    for(let a=0;a<m;a++){
+      const j=finiteIdx[a],dj=dVals[j];
+      for(let b=a;b<m;b++){
+        const k=finiteIdx[b],dk=dVals[k];
+        const idx=triOffsets[j]+(k-j);
+        pairCount[idx]++;
+        pairSumJ[idx]+=dj;
+        pairSumK[idx]+=dk;
+        pairProd[idx]+=dj*dk;
+      }
+    }
+  }
+
+  function model(){
+    if(!n) return null;
+    const xMean=Array(p).fill(0);
+    const xStd=Array(p).fill(1);
+    const meanD=new Float64Array(p);
+
+    for(let j=0;j<p;j++){
+      if(count[j]>0){
+        meanD[j]=sumD[j]/count[j];
+        xMean[j]=ref[j]+meanD[j];
+        const variance=Math.max(0,(sumD2[j]-sumD[j]*sumD[j]/count[j])/count[j]);
+        const sd=Math.sqrt(variance);
+        xStd[j]=Number.isFinite(sd)&&sd>=1e-9 ? sd : 1;
+      }
+    }
+
+    const yMean=yRef+sumDy/n;
+    const yVariance=Math.max(0,(sumDy2-sumDy*sumDy/n)/n);
+    let yStd=Math.sqrt(yVariance);
+    if(!Number.isFinite(yStd)||yStd<1e-9) yStd=1;
+
+    const A=Array.from({length:p},()=>Array(p).fill(0));
+    const b=Array(p).fill(0);
+
+    for(let j=0;j<p;j++){
+      if(count[j]>0){
+        const cov=sumDDy[j]-meanD[j]*sumDyFinite[j];
+        b[j]=cov/(xStd[j]*yStd);
+      }
+    }
+
+    for(let j=0;j<p;j++){
+      for(let k=j;k<p;k++){
+        const idx=triOffsets[j]+(k-j);
+        const c=pairCount[idx];
+        if(c>0){
+          const centered=
+            pairProd[idx]
+            - meanD[k]*pairSumJ[idx]
+            - meanD[j]*pairSumK[idx]
+            + c*meanD[j]*meanD[k];
+          A[j][k]=centered/(xStd[j]*xStd[k]);
+          A[k][j]=A[j][k];
+        }
+      }
+      A[j][j]+=lambda*n;
+    }
+
+    return {
+      weights:solveSpdCholesky(A,b) || solveLinearSystem(A,b),
+      xMean,xStd,yMean,yStd,
+      finiteCounts:Array.from(count),
+      missingAware:true,
+      incrementalExact:true
+    };
+  }
+
+  return {add,model,get size(){return n;}};
 }
 
 function predictModelMissing(model,x){
@@ -3125,6 +3812,15 @@ async function runAuxWalkForward(){
 
       const cases=[];
 
+      // 起点は時系列順なので、各variantの学習統計を前起点から増分更新できる。
+      // 学習対象は従来どおり targetTs<=origin.ts の全samples。削減するのは再集計だけ。
+      const wfAccumulators=new Map();
+      const wfPointers=new Map();
+      for(const v of AUX_VARIANTS){
+        wfAccumulators.set(v.id,createMissingRidgeAccumulator(variantFeatureNames(v.id).length,0.8));
+        wfPointers.set(v.id,0);
+      }
+
       for(let oi=0;oi<origins.length;oi++){
         const origin=origins[oi];
         const target=map.get(origin.ts+h.minutes*60000);
@@ -3141,27 +3837,32 @@ async function runAuxWalkForward(){
 
         for(const v of AUX_VARIANTS){
           const allSamples=variantSamples.get(v.id);
-          const train=prefixSamplesThroughTarget(allSamples,origin.ts);
+          const acc=wfAccumulators.get(v.id);
+          let ptr=wfPointers.get(v.id)||0;
 
-          if(train.length<300){
+          while(ptr<allSamples.length && allSamples[ptr].targetTs<=origin.ts){
+            acc.add(allSamples[ptr]);
+            ptr++;
+          }
+          wfPointers.set(v.id,ptr);
+
+          if(acc.size<300){
             failed=true;
             break;
           }
 
-          trainCount=Math.min(trainCount,train.length);
-
-          let pred;
+          trainCount=Math.min(trainCount,acc.size);
+          const model=acc.model();
+          let x;
 
           if(v.id==="B0"){
-            const model=trainRidgeClosedForm(train,0.8);
-            pred=origin.temperature+predictModel(model,baseX);
+            x=baseX;
           }else{
             const aux=buildAuxFeatureAt(origin.station,origin.ts,v.id);
-            const x=[...baseX,...aux.x];
-            const model=trainRidgeClosedFormMissing(train,0.8);
-            pred=origin.temperature+predictModelMissing(model,x);
+            x=[...baseX,...aux.x];
           }
 
+          const pred=origin.temperature+predictModelMissing(model,x);
           preds[v.id]=pred;
           err[v.id]=pred-target.temperature;
           abs[v.id]=Math.abs(err[v.id]);
@@ -3381,24 +4082,71 @@ function rainAnyFutureWindow(map,startTs,minutes){
   return any?1:0;
 }
 
-function continuousBaselineForSample(s,key,method){
-  if(method==="diurnal" && Number.isFinite(s.diurnal?.[key])){
-    return s.diurnal[key];
+function rainAnyFutureWindowCtx(ctx,startTs,minutes){
+  const steps=Math.round(minutes/10);
+
+  // v8.5 exact高速化：連続10分系列ならprefix countでO(1)。
+  // 欠損がある地点は従来の逐次Map確認へfallbackし、意味論を変えない。
+  if(ctx?.dense10m && ctx.indexByTs && ctx.rainPrefix){
+    const start=ctx.indexByTs.get(startTs);
+    if(start!=null){
+      const end=start+steps;
+      if(
+        end<ctx.rows.length &&
+        ctx.rows[end].ts===startTs+steps*10*60000
+      ){
+        const count=ctx.rainPrefix[end+1]-ctx.rainPrefix[start+1];
+        return count>0 ? 1 : 0;
+      }
+    }
   }
-  return s.current[key];
+
+  return rainAnyFutureWindow(ctx?.map||new Map(),startTs,minutes);
+}
+
+function multiCurrentRow(s){
+  return s.base?.curRow || s.curRow || s.current || null;
+}
+function multiTargetRow(s){
+  return s.base?.targetRow || s.targetRow || s.target || null;
+}
+function multiCurrentValue(s,key){
+  return multiCurrentRow(s)?.[key];
+}
+function multiTargetValue(s,key){
+  return multiTargetRow(s)?.[key];
+}
+function multiDiurnalValue(s,key){
+  if(s.diurnalRow && Number.isFinite(s.diurnalRow[key])) return s.diurnalRow[key];
+  if(s.diurnal && Number.isFinite(s.diurnal[key])) return s.diurnal[key];
+  return NaN;
+}
+function multiCurrentRain(s){
+  const r=multiCurrentRow(s);
+  return isRainOccurrenceRow(r)?1:0;
+}
+
+function continuousBaselineForSample(s,key,method){
+  const cur=multiCurrentValue(s,key);
+  const d=multiDiurnalValue(s,key);
+  if(method==="diurnal" && Number.isFinite(d)) return d;
+  return cur;
 }
 
 function selectContinuousBaselineMethod(train,key){
-  const actual=train.map(s=>s.target[key]);
-  const flat=train.map(s=>s.current[key]);
-  const diurnal=train.map(s=>
-    Number.isFinite(s.diurnal?.[key]) ? s.diurnal[key] : s.current[key]
-  );
-
-  const flatMae=mae(actual,flat);
-  const diurnalMae=mae(actual,diurnal);
-
-  return diurnalMae<flatMae ? "diurnal" : "flat";
+  let flatAbs=0,diurnalAbs=0,n=0;
+  for(const s of train){
+    const actual=multiTargetValue(s,key);
+    const flat=multiCurrentValue(s,key);
+    const d=multiDiurnalValue(s,key);
+    const diurnal=Number.isFinite(d) ? d : flat;
+    if(!Number.isFinite(actual) || !Number.isFinite(flat) || !Number.isFinite(diurnal)) continue;
+    flatAbs+=Math.abs(actual-flat);
+    diurnalAbs+=Math.abs(actual-diurnal);
+    n++;
+  }
+  if(!n) return "flat";
+  return diurnalAbs<flatAbs ? "diurnal" : "flat";
 }
 
 function latestContinuousBaseline(latest,steps,key,method){
@@ -3417,79 +4165,163 @@ function multiBaselineLabel(method){
 
 function buildMultiTargetSamples(rows,steps){
   const out=[];
-  const contexts=(rows===globalRows && stationContextCache)
-    ? [...stationContextCache.values()]
-    : [...groupByStation(rows).values()].map(stationRows0=>{
-        const stationRows=[...stationRows0].sort((a,b)=>a.ts-b.ts);
-        return {rows:stationRows,map:new Map(stationRows.map(r=>[r.ts,r]))};
-      });
+  const contextMap=new Map();
 
-  for(const ctx of contexts){
-    const map=ctx.map;
-
-    for(const cur of ctx.rows){
-      const x=makeFeature(cur,map);
-      const target=map.get(cur.ts+steps*10*60000);
-      if(!x || !target) continue;
-
-      if(
-        !Number.isFinite(cur.humidity) || !Number.isFinite(target.humidity) ||
-        !Number.isFinite(cur.pressure) || !Number.isFinite(target.pressure) ||
-        !Number.isFinite(cur.wind) || !Number.isFinite(target.wind) ||
-        !Number.isFinite(cur.gust) || !Number.isFinite(target.gust)
-      ) continue;
-
-      const rain30=rainAnyFutureWindow(map,target.ts,30);
-      const rain60=rainAnyFutureWindow(map,target.ts,60);
-      const rain180=rainAnyFutureWindow(map,target.ts,180);
-
-      if(rain30==null || rain60==null || rain180==null) continue;
-
-      const sameClockYesterday=map.get(target.ts-24*60*60*1000);
-
-      out.push({
-        x,
-        y:[
-          target.humidity-cur.humidity,
-          target.pressure-cur.pressure,
-          target.wind-cur.wind,
-          target.gust-cur.gust,
-          isRainOccurrenceRow(target)?1:0,
-          rain30,
-          rain60,
-          rain180
-        ],
-        station:cur.station,
-        ts:cur.ts,
-        targetTs:target.ts,
-        current:{
-          humidity:cur.humidity,
-          pressure:cur.pressure,
-          wind:cur.wind,
-          gust:cur.gust,
-          rain:isRainOccurrenceRow(cur)?1:0
-        },
-        diurnal:{
-          humidity:Number.isFinite(sameClockYesterday?.humidity)?sameClockYesterday.humidity:NaN,
-          pressure:Number.isFinite(sameClockYesterday?.pressure)?sameClockYesterday.pressure:NaN,
-          wind:Number.isFinite(sameClockYesterday?.wind)?sameClockYesterday.wind:NaN,
-          gust:Number.isFinite(sameClockYesterday?.gust)?sameClockYesterday.gust:NaN
-        },
-        target:{
-          humidity:target.humidity,
-          pressure:target.pressure,
-          wind:target.wind,
-          gust:target.gust,
-          rain:isRainOccurrenceRow(target)?1:0,
-          rain30,
-          rain60,
-          rain180
-        }
-      });
+  if(rows===globalRows && stationContextCache){
+    for(const [station,ctx] of stationContextCache.entries()) contextMap.set(station,ctx);
+  }else{
+    for(const [station,stationRows0] of groupByStation(rows).entries()){
+      const stationRows=[...stationRows0].sort((a,b)=>a.ts-b.ts);
+      const map=new Map(stationRows.map(r=>[r.ts,r]));
+      const indexByTs=new Map(stationRows.map((r,i)=>[r.ts,i]));
+      const rainPrefix=new Int32Array(stationRows.length+1);
+      let dense10m=true;
+      for(let i=0;i<stationRows.length;i++){
+        rainPrefix[i+1]=rainPrefix[i]+(isRainOccurrenceRow(stationRows[i])?1:0);
+        if(i>0 && stationRows[i].ts-stationRows[i-1].ts!==10*60000) dense10m=false;
+      }
+      contextMap.set(station,{station,rows:stationRows,map,indexByTs,rainPrefix,dense10m});
     }
   }
 
-  return out.sort((a,b)=>a.ts-b.ts);
+  const base=buildSamples(rows,steps);
+
+  for(const s of base){
+    const ctx=contextMap.get(s.station);
+    if(!ctx) continue;
+    const cur=s.curRow || ctx.map.get(s.ts);
+    const target=s.targetRow || ctx.map.get(s.targetTs);
+    if(!cur || !target) continue;
+
+    if(
+      !Number.isFinite(cur.humidity) || !Number.isFinite(target.humidity) ||
+      !Number.isFinite(cur.pressure) || !Number.isFinite(target.pressure) ||
+      !Number.isFinite(cur.wind) || !Number.isFinite(target.wind) ||
+      !Number.isFinite(cur.gust) || !Number.isFinite(target.gust)
+    ) continue;
+
+    let rain30,rain60,rain180,targetIndex=s.targetIndex;
+    if(ctx.dense10m && Number.isInteger(targetIndex) && targetIndex>=0){
+      const pfx=ctx.rainPrefix;
+      if(targetIndex+18>=ctx.rows.length) continue;
+      rain30=(pfx[targetIndex+4]-pfx[targetIndex+1])>0?1:0;
+      rain60=(pfx[targetIndex+7]-pfx[targetIndex+1])>0?1:0;
+      rain180=(pfx[targetIndex+19]-pfx[targetIndex+1])>0?1:0;
+    }else{
+      rain30=rainAnyFutureWindowCtx(ctx,target.ts,30);
+      rain60=rainAnyFutureWindowCtx(ctx,target.ts,60);
+      rain180=rainAnyFutureWindowCtx(ctx,target.ts,180);
+      if(rain30==null || rain60==null || rain180==null) continue;
+    }
+
+    let sameClockYesterday=null;
+    if(ctx.dense10m && Number.isInteger(targetIndex) && targetIndex>=144){
+      const d=ctx.rows[targetIndex-144];
+      if(d?.ts===target.ts-24*60*60*1000) sameClockYesterday=d;
+    }
+    if(!sameClockYesterday) sameClockYesterday=ctx.map.get(target.ts-24*60*60*1000);
+
+    const y=[
+      target.humidity-cur.humidity,
+      target.pressure-cur.pressure,
+      target.wind-cur.wind,
+      target.gust-cur.gust,
+      isRainOccurrenceRow(target)?1:0,
+      rain30,
+      rain60,
+      rain180
+    ];
+
+    out.push({
+      x:s.x,
+      y,
+      station:s.station,
+      ts:s.ts,
+      targetTs:s.targetTs,
+      base:s,
+      diurnalRow:sameClockYesterday
+    });
+  }
+
+  return out;
+}
+
+function solveSpdCholesky(A,b){
+  const n=A.length;
+  const L=Array.from({length:n},()=>new Float64Array(n));
+
+  for(let i=0;i<n;i++){
+    for(let j=0;j<=i;j++){
+      let sum=A[i][j];
+      for(let k=0;k<j;k++) sum-=L[i][k]*L[j][k];
+
+      if(i===j){
+        if(!(sum>1e-12) || !Number.isFinite(sum)) return null;
+        L[i][j]=Math.sqrt(sum);
+      }else{
+        const d=L[j][j];
+        if(!(d>0)) return null;
+        L[i][j]=sum/d;
+      }
+    }
+  }
+
+  const y=new Float64Array(n);
+  for(let i=0;i<n;i++){
+    let sum=b[i];
+    for(let k=0;k<i;k++) sum-=L[i][k]*y[k];
+    y[i]=sum/L[i][i];
+  }
+
+  const x=Array(n).fill(0);
+  for(let i=n-1;i>=0;i--){
+    let sum=y[i];
+    for(let k=i+1;k<n;k++) sum-=L[k][i]*x[k];
+    x[i]=sum/L[i][i];
+  }
+  return x;
+}
+
+function solveSpdCholeskyMulti(A,B){
+  const n=A.length;
+  const q=B[0]?.length||0;
+  if(!q) return null;
+  const L=Array.from({length:n},()=>new Float64Array(n));
+
+  for(let i=0;i<n;i++){
+    for(let j=0;j<=i;j++){
+      let sum=A[i][j];
+      for(let k=0;k<j;k++) sum-=L[i][k]*L[j][k];
+
+      if(i===j){
+        if(!(sum>1e-12) || !Number.isFinite(sum)) return null;
+        L[i][j]=Math.sqrt(sum);
+      }else{
+        const d=L[j][j];
+        if(!(d>0)) return null;
+        L[i][j]=sum/d;
+      }
+    }
+  }
+
+  const Y=Array.from({length:n},()=>new Float64Array(q));
+  for(let i=0;i<n;i++){
+    for(let c=0;c<q;c++){
+      let sum=B[i][c];
+      for(let k=0;k<i;k++) sum-=L[i][k]*Y[k][c];
+      Y[i][c]=sum/L[i][i];
+    }
+  }
+
+  const X=Array.from({length:n},()=>Array(q).fill(0));
+  for(let i=n-1;i>=0;i--){
+    for(let c=0;c<q;c++){
+      let sum=Y[i][c];
+      for(let k=i+1;k<n;k++) sum-=L[k][i]*X[k][c];
+      X[i][c]=sum/L[i][i];
+    }
+  }
+  return X;
 }
 
 function solveLinearSystemMulti(A,B){
@@ -3522,6 +4354,16 @@ function solveLinearSystemMulti(A,B){
 }
 
 function trainMultiTargetRidge(samples,lambda){
+  const fast=trainDenseMulti(samples,lambda);
+  if(fast){
+    if(perfCounters) perfCounters.denseMultiFits++;
+    return fast;
+  }
+  if(perfCounters) perfCounters.fallbackMultiFits++;
+  return trainMultiTargetRidgeLegacy(samples,lambda);
+}
+
+function trainMultiTargetRidgeLegacy(samples,lambda){
   const n=samples.length;
   const p=samples[0].x.length;
   const q=samples[0].y.length;
@@ -3584,21 +4426,24 @@ function trainMultiTargetRidge(samples,lambda){
     A[j][j]+=lambda*n;
   }
 
-  return {xMean,xStd,yMean,yStd,W:solveLinearSystemMulti(A,B)};
+  return {xMean,xStd,yMean,yStd,W:solveSpdCholeskyMulti(A,B) || solveLinearSystemMulti(A,B)};
+}
+
+function predictMultiTargetInto(model,x,out){
+  const q=model.yMean.length;
+  if(!out || out.length!==q) out=Array(q).fill(0);
+  for(let k=0;k<q;k++) out[k]=model.yMean[k];
+
+  for(let j=0;j<model.W.length;j++){
+    const zx=(x[j]-model.xMean[j])/model.xStd[j];
+    const row=model.W[j];
+    for(let k=0;k<q;k++) out[k]+=model.yStd[k]*row[k]*zx;
+  }
+  return out;
 }
 
 function predictMultiTarget(model,x){
-  const q=model.yMean.length;
-  const out=[...model.yMean];
-
-  for(let k=0;k<q;k++){
-    let z=0;
-    for(let j=0;j<model.W.length;j++){
-      z+=model.W[j][k]*((x[j]-model.xMean[j])/model.xStd[j]);
-    }
-    out[k]+=model.yStd[k]*z;
-  }
-  return out;
+  return predictMultiTargetInto(model,x,Array(model.yMean.length).fill(0));
 }
 
 function brierScore(actual,pred){
@@ -3609,6 +4454,39 @@ function brierScore(actual,pred){
     s+=d*d;
   }
   return s/actual.length;
+}
+
+function binaryLogLoss(actual,pred){
+  if(!actual.length) return NaN;
+  const eps=1e-6;
+  let s=0;
+  for(let i=0;i<actual.length;i++){
+    const p=clampNumber(pred[i],eps,1-eps);
+    const y=actual[i];
+    s+=-(y*Math.log(p)+(1-y)*Math.log(1-p));
+  }
+  return s/actual.length;
+}
+
+function averagePrecision(actual,pred){
+  if(!actual.length) return NaN;
+  const pairs=actual.map((y,i)=>({y,p:pred[i]})).sort((a,b)=>b.p-a.p);
+  const positives=pairs.reduce((n,r)=>n+(r.y===1?1:0),0);
+  if(!positives) return NaN;
+  let tp=0,sumPrec=0;
+  for(let i=0;i<pairs.length;i++){
+    if(pairs[i].y===1){
+      tp++;
+      sumPrec+=tp/(i+1);
+    }
+  }
+  return sumPrec/positives;
+}
+
+function brierSkillPct(model,baseline){
+  return Number.isFinite(model)&&Number.isFinite(baseline)&&baseline>0
+    ? (baseline-model)/baseline*100
+    : NaN;
 }
 
 function multiMetricsFromPred(T,RH,wind){
@@ -3679,16 +4557,19 @@ function getLatestRowForMulti(){
 }
 
 function trainMultiForecastHorizon(steps){
+  const totalStart=performance.now();
+  const sampleStart=performance.now();
   const samples=buildMultiTargetSamples(globalRows,steps);
-  if(samples.length<120) return {ok:false,error:"学習サンプル不足"};
+  const sampleMs=performance.now()-sampleStart;
+  if(samples.length<120) return {ok:false,error:"学習サンプル不足",timing:{sampleMs}};
 
   const splitIndex=Math.floor(samples.length*0.8);
   const testStartTs=samples[splitIndex]?.ts;
-  if(!Number.isFinite(testStartTs)) return {ok:false,error:"検証区間を作れません"};
+  if(!Number.isFinite(testStartTs)) return {ok:false,error:"検証区間を作れません",timing:{sampleMs}};
 
   const train=samples.filter(s=>s.targetTs<testStartTs);
   const test=samples.filter(s=>s.ts>=testStartTs);
-  if(train.length<80 || test.length<20) return {ok:false,error:"検証サンプル不足"};
+  if(train.length<80 || test.length<20) return {ok:false,error:"検証サンプル不足",timing:{sampleMs}};
 
   const baselineMethods={
     humidity:selectContinuousBaselineMethod(train,"humidity"),
@@ -3697,63 +4578,82 @@ function trainMultiForecastHorizon(steps){
     gust:selectContinuousBaselineMethod(train,"gust")
   };
 
-  const evalModel=trainMultiTargetRidge(train,0.8);
-  const evalPred=test.map(s=>predictMultiTarget(evalModel,s.x));
+  // v8.5: 評価用trainと全量trainを1回の教師値走査で同時作成。
+  const pairFitStart=performance.now();
+  const pair=trainMultiTargetPair(train,samples,0.8);
+  const evalModel=pair.evalModel;
+  const finalModel=pair.finalModel;
+  const pairFitMs=performance.now()-pairFitStart;
 
-  const ai={humidity:[],pressure:[],wind:[],gust:[]};
-  const act={humidity:[],pressure:[],wind:[],gust:[]};
-  const base={humidity:[],pressure:[],wind:[],gust:[]};
+  const keys=["humidity","pressure","wind","gust"];
+  const aiAbs={humidity:0,pressure:0,wind:0,gust:0};
+  const baseAbs={humidity:0,pressure:0,wind:0,gust:0};
+  const needRichRainMetrics=DISPLAY_HORIZONS.some(h=>h.steps===steps);
+  const rainPred=needRichRainMetrics ? Array.from({length:4},()=>[]) : null;
+  const rainAct=needRichRainMetrics ? Array.from({length:4},()=>[]) : null;
+  const rainAiSq=[0,0,0,0];
+  const rainBaseSq=[0,0,0,0];
+  const zbuf=Array(8).fill(0);
 
-  const rainPred=[[],[],[],[]];
-  const rainAct=[[],[],[],[]];
-  const rainBase=[[],[],[],[]];
+  const metricStart=performance.now();
+  for(const s of test){
+    const z=predictMultiTargetInto(evalModel,s.x,zbuf);
 
-  for(let i=0;i<test.length;i++){
-    const s=test[i],z=evalPred[i];
+    const cur=multiCurrentRow(s);
+    const target=multiTargetRow(s);
+    const pred={
+      humidity:clampNumber(cur.humidity+z[0],0,100),
+      pressure:cur.pressure+z[1],
+      wind:Math.max(0,cur.wind+z[2])
+    };
+    pred.gust=Math.max(pred.wind,cur.gust+z[3]);
 
-    const hp=clampNumber(s.current.humidity+z[0],0,100);
-    const pp=s.current.pressure+z[1];
-    const wp=Math.max(0,s.current.wind+z[2]);
-    const gp=Math.max(wp,s.current.gust+z[3]);
-
-    ai.humidity.push(hp); act.humidity.push(s.target.humidity);
-    ai.pressure.push(pp); act.pressure.push(s.target.pressure);
-    ai.wind.push(wp); act.wind.push(s.target.wind);
-    ai.gust.push(gp); act.gust.push(s.target.gust);
-
-    for(const key of ["humidity","pressure","wind","gust"]){
-      base[key].push(continuousBaselineForSample(s,key,baselineMethods[key]));
+    const di=s.diurnalRow;
+    for(const key of keys){
+      aiAbs[key]+=Math.abs(pred[key]-target[key]);
+      const dv=Number.isFinite(di?.[key]) ? di[key] : cur[key];
+      const b=baselineMethods[key]==="diurnal" ? dv : cur[key];
+      baseAbs[key]+=Math.abs(b-target[key]);
     }
 
-    const rainTargets=[s.target.rain,s.target.rain30,s.target.rain60,s.target.rain180];
+    const rb=isRainOccurrenceRow(cur)?1:0;
     for(let k=0;k<4;k++){
-      rainPred[k].push(clampNumber(z[4+k],0,1));
-      rainAct[k].push(rainTargets[k]);
-      rainBase[k].push(s.current.rain);
+      const rp=clampNumber(z[4+k],0,1);
+      const y=s.y[4+k];
+      if(needRichRainMetrics){
+        rainPred[k].push(rp);
+        rainAct[k].push(y);
+      }
+      const da=rp-y,db=rb-y;
+      rainAiSq[k]+=da*da;
+      rainBaseSq[k]+=db*db;
     }
   }
+  const metricMs=performance.now()-metricStart;
 
   const metrics={};
-  for(const key of ["humidity","pressure","wind","gust"]){
-    metrics[key+"Mae"]=mae(act[key],ai[key]);
-    metrics[key+"BaseMae"]=mae(act[key],base[key]);
+  for(const key of keys){
+    metrics[key+"Mae"]=aiAbs[key]/test.length;
+    metrics[key+"BaseMae"]=baseAbs[key]/test.length;
     metrics[key+"BaselineMethod"]=baselineMethods[key];
   }
 
-  metrics.rainBrier=brierScore(rainAct[0],rainPred[0]);
-  metrics.rainBaseBrier=brierScore(rainAct[0],rainBase[0]);
-  metrics.rain30Brier=brierScore(rainAct[1],rainPred[1]);
-  metrics.rain30BaseBrier=brierScore(rainAct[1],rainBase[1]);
-  metrics.rain60Brier=brierScore(rainAct[2],rainPred[2]);
-  metrics.rain60BaseBrier=brierScore(rainAct[2],rainBase[2]);
-  metrics.rain180Brier=brierScore(rainAct[3],rainPred[3]);
-  metrics.rain180BaseBrier=brierScore(rainAct[3],rainBase[3]);
+  const names=["rain","rain30","rain60","rain180"];
+  for(let k=0;k<4;k++){
+    const prefix=names[k];
+    const aiBrier=rainAiSq[k]/test.length;
+    const baseBrier=rainBaseSq[k]/test.length;
+    metrics[prefix+"Brier"]=aiBrier;
+    metrics[prefix+"BaseBrier"]=baseBrier;
+    metrics[prefix+"BrierSkillPct"]=brierSkillPct(aiBrier,baseBrier);
+    metrics[prefix+"LogLoss"]=needRichRainMetrics ? binaryLogLoss(rainAct[k],rainPred[k]) : NaN;
+    metrics[prefix+"AP"]=needRichRainMetrics ? averagePrecision(rainAct[k],rainPred[k]) : NaN;
+  }
 
   const latest=getLatestRowForMulti();
   const latestFeature=buildLatestFeature(globalRows);
-  if(!latest || !latestFeature?.ok) return {ok:false,error:"最新特徴量を作れません"};
+  if(!latest || !latestFeature?.ok) return {ok:false,error:"最新特徴量を作れません",timing:{sampleMs,pairFitMs,metricMs}};
 
-  const finalModel=trainMultiTargetRidge(samples,0.8);
   const z=predictMultiTarget(finalModel,latestFeature.x);
 
   const aiForecast={
@@ -3767,10 +4667,8 @@ function trainMultiForecastHorizon(steps){
   const adoptedForecast={};
   const adoptedMethod={};
 
-  for(const key of ["humidity","pressure","wind","gust"]){
-    baselineForecast[key]=latestContinuousBaseline(
-      latest,steps,key,baselineMethods[key]
-    );
+  for(const key of keys){
+    baselineForecast[key]=latestContinuousBaseline(latest,steps,key,baselineMethods[key]);
     const useAI=metrics[key+"Mae"]<metrics[key+"BaseMae"];
     adoptedForecast[key]=useAI ? aiForecast[key] : baselineForecast[key];
     adoptedMethod[key]=useAI
@@ -3796,7 +4694,13 @@ function trainMultiForecastHorizon(steps){
       adopted:adoptedForecast,
       adoptedMethod
     },
-    metrics
+    metrics,
+    timing:{
+      sampleMs,
+      pairFitMs,
+      metricMs,
+      totalMs:performance.now()-totalStart
+    }
   };
 }
 
@@ -3814,6 +4718,7 @@ async function runMultiForecast(){
   multiForecastRunning=true;
   $("runMultiForecast").disabled=true;
   const local=new Map();
+  perfCounters=newPerfCounters();
 
   try{
     for(let i=0;i<ALL_HORIZONS.length;i++){
@@ -3826,16 +4731,29 @@ async function runMultiForecast(){
       local.set(h.steps,trainMultiForecastHorizon(h.steps));
     }
 
+    const calcDone=performance.now();
     multiForecastResults=local;
     renderMultiForecast();
+    renderMultiMetricHelp();
+    const renderDone=performance.now();
 
-    const sec=(performance.now()-started)/1000;
-    const ok=[...local.values()].filter(r=>r.ok).length;
+    const okRows=[...local.values()].filter(r=>r.ok);
+    const sumTiming=key=>okRows.reduce((a,r)=>a+(r.timing?.[key]||0),0);
+    const sampleSec=sumTiming("sampleMs")/1000;
+    const pairFitSec=sumTiming("pairFitMs")/1000;
+    const metricSec=sumTiming("metricMs")/1000;
+    const renderSec=(renderDone-calcDone)/1000;
+    const sec=(renderDone-started)/1000;
+    const exact=denseRidgeCache ? "ON" : "OFF（従来計算へfallback）";
+    const mem=denseRidgeCache ? `${(denseRidgeCache.estimatedBytes/1024/1024).toFixed(1)}MB` : "0MB";
+    const denseMode=denseRidgeCache?.mode||"-";
+
     $("multiForecastStatus").textContent=
-      `完了：${ok}/144 horizon / ${sec.toFixed(2)}秒\n`+
-      `湿度・気圧・風・突風はΔ直接回帰。各変数の基準は学習側だけで「現在値固定 / 前日同時刻」を選択。\n`+
-      `降水は時点/30分/1時間/3時間のrisk score（未校正）を直接学習。\n`+
-      `派生指標は採用気温・採用湿度・採用風速から計算。通常の気温144モデルとは別実験です。`;
+      `完了：${okRows.length}/144 horizon / ${sec.toFixed(2)}秒\n`+
+      `速度内訳：sample構築 ${sampleSec.toFixed(2)}秒 / 評価+全量pair fit ${pairFitSec.toFixed(2)}秒 / 検証集計 ${metricSec.toFixed(2)}秒 / 描画 ${renderSec.toFixed(2)}秒\n`+
+      `exact高速path ${exact} (${denseMode}) / prefix統計メモリ ${mem} / 高速multi fit ${perfCounters.denseMultiFits}回 / fallback ${perfCounters.fallbackMultiFits}回\n`+
+      `※高速pathは同じ51特徴量・同じ教師値・同じridge λを十分統計量で解く代数的高速化。horizon削減・サンプル間引き・近似予測はしていません。\n`+
+      `湿度・気圧・風・突風はΔ直接回帰。降水は時点/30分/1時間/3時間riskを直接学習。`;
   }catch(e){
     $("multiForecastStatus").textContent="総合予報エラー\n"+e.message;
   }finally{
@@ -3890,6 +4808,33 @@ function riskScoreText(v){
   return Number.isFinite(v) ? (v*100).toFixed(1) : "-";
 }
 
+const MULTI_METRIC_HELP={
+  temperature:"気温：採用予報。AIと基準予報をholdout MAEで比較した結果をhorizonごとに採用。",
+  humidity:"相対湿度：その気温での飽和水蒸気量に対する割合。horizonごとにAI/基準を採用。",
+  dewpoint:"露点：同じ水蒸気量のまま冷却したとき飽和する温度。蒸し暑さ・水蒸気量の把握に有用。",
+  discomfort:"不快指数：気温と相対湿度から算出。風・日射は直接含まない経験的な快適性指標。",
+  apparent:"体感温度AT：気温・水蒸気圧・平均風速を使う体感温度式。直射日光は直接含まない。",
+  humidex:"Humidex：気温と水蒸気圧による高温多湿の不快度指標。実気温そのものではない。",
+  heatIndex:"Heat Index：高温多湿域でのみ表示するRothfusz系推定。日射・風は直接含まない。",
+  wetBulb:"簡易湿球温度：Stull近似。蒸発冷却の効きやすさを見る目安で、WBGTではない。",
+  absoluteHumidity:"絶対湿度：空気1m³あたりの水蒸気質量(g/m³)。相対湿度より実際の水蒸気量を直感的に見やすい。",
+  vpd:"VPD：飽和水蒸気圧と実水蒸気圧の差(kPa)。大きいほど空気の蒸発要求が強い。",
+  pressure:"海面気圧：採用予報。単独値より時間変化を見る用途が中心。",
+  wind:"平均風速：採用予報。現在は未来風向までは直接予測していない。",
+  gust:"最大瞬間風速：採用予報。表示時に平均風速以上となる物理整合性を課す。",
+  rainRisk:"降水risk・その時刻：0～1の未校正score。0.7を降水確率70%とは呼ばない。",
+  rainRisk30:"降水risk・その後30分：対象時刻の直後30分内に1回でも降水現象がある教師ラベル。未校正score。",
+  rainRisk60:"降水risk・その後1時間：対象時刻の直後1時間内に1回でも降水現象がある教師ラベル。未校正score。",
+  rainRisk180:"降水risk・その後3時間：対象時刻の直後3時間内に1回でも降水現象がある教師ラベル。未校正score。"
+};
+
+function renderMultiMetricHelp(){
+  const el=$("multiMetricHelp");
+  if(!el) return;
+  const key=$("multiMetricSelect")?.value||"discomfort";
+  el.textContent=MULTI_METRIC_HELP[key]||"";
+}
+
 function multiPercentile(values,q){
   const a=values.filter(Number.isFinite).sort((x,y)=>x-y);
   if(!a.length) return NaN;
@@ -3932,6 +4877,26 @@ function peakPoint(points,key,mode="max"){
   );
 }
 
+function adjacentJumpStats(points,key){
+  const a=[];
+  for(let i=1;i<points.length;i++){
+    const x=points[i-1][key],y=points[i][key];
+    if(Number.isFinite(x)&&Number.isFinite(y)) a.push(Math.abs(y-x));
+  }
+  return {
+    max:a.length?Math.max(...a):NaN,
+    p95:a.length?multiPercentile(a,.95):NaN
+  };
+}
+
+function methodSwitchCount(points,key){
+  let n=0;
+  for(let i=1;i<points.length;i++){
+    if(String(points[i-1][key]??"")!==String(points[i][key]??"")) n++;
+  }
+  return n;
+}
+
 function renderMultiForecastSummary(points){
   const el=$("multiForecastSummary");
   if(!el) return;
@@ -3960,11 +4925,18 @@ function renderMultiForecastSummary(points){
   });
   const nightDI80=night.filter(p=>p.discomfort>=80).length*10;
 
-  const aiJumps=[];
-  const adoptedJumps=[];
-  for(let i=1;i<points.length;i++){
-    aiJumps.push(Math.abs(points[i].temperatureAI-points[i-1].temperatureAI));
-    adoptedJumps.push(Math.abs(points[i].temperature-points[i-1].temperature));
+  const aiTempJump=adjacentJumpStats(points,"temperatureAI");
+  const adoptedTempJump=adjacentJumpStats(points,"temperature");
+  const humidityJump=adjacentJumpStats(points,"humidity");
+  const pressureJump=adjacentJumpStats(points,"pressure");
+
+  let riskViolations=0;
+  let maxRiskInversion=0;
+  for(const p of points){
+    const d1=p.rainRisk30-p.rainRisk60;
+    const d2=p.rainRisk60-p.rainRisk180;
+    if(d1>1e-12){riskViolations++;maxRiskInversion=Math.max(maxRiskInversion,d1);}
+    if(d2>1e-12){riskViolations++;maxRiskInversion=Math.max(maxRiskInversion,d2);}
   }
 
   const latest=getLatestRowForMulti();
@@ -3972,20 +4944,27 @@ function renderMultiForecastSummary(points){
     ? minP.pressure-latest.pressure
     : NaN;
 
+  const fmtJump=(v,unit)=>Number.isFinite(v)?`${v.toFixed(2)}${unit}`:"-";
+
   el.textContent=
-    `24時間サマリー\\n`+
+    `24時間サマリー\n`+
     `採用気温：最低 ${minT?.temperature.toFixed(1)??"-"}℃ (${minT?formatShort(minT.ts):"-"}) / `+
-      `最高 ${maxT?.temperature.toFixed(1)??"-"}℃ (${maxT?formatShort(maxT.ts):"-"})\\n`+
+      `最高 ${maxT?.temperature.toFixed(1)??"-"}℃ (${maxT?formatShort(maxT.ts):"-"})\n`+
     `不快指数：最大 ${maxDI?.discomfort.toFixed(1)??"-"} (${maxDI?formatShort(maxDI.ts):"-"}) / `+
-      `DI≥85 合計 ${formatDurationMinutes(di85Count*10)} / 最長連続 ${formatDurationMinutes(di85Longest)}\\n`+
+      `DI≥85 合計 ${formatDurationMinutes(di85Count*10)} / 最長連続 ${formatDurationMinutes(di85Longest)}\n`+
     `夜間(22-06時) DI≥80：${formatDurationMinutes(nightDI80)} / `+
-      `最大露点 ${maxDew?.dewpoint.toFixed(1)??"-"}℃ / 最大簡易湿球 ${maxWB?.wetBulb.toFixed(1)??"-"}℃\\n`+
+      `最大露点 ${maxDew?.dewpoint.toFixed(1)??"-"}℃ / 最大簡易湿球 ${maxWB?.wetBulb.toFixed(1)??"-"}℃\n`+
     `Heat Index最大 ${maxHI?.heatIndex.toFixed(1)??"-"}℃ (${maxHI?formatShort(maxHI.ts):"-"}) / `+
-      `最大突風 ${maxG?.gust.toFixed(1)??"-"}m/s (${maxG?formatShort(maxG.ts):"-"})\\n`+
+      `最大突風 ${maxG?.gust.toFixed(1)??"-"}m/s (${maxG?formatShort(maxG.ts):"-"})\n`+
     `最低海面気圧 ${minP?.pressure.toFixed(1)??"-"}hPa (${minP?formatShort(minP.ts):"-"}) / `+
-      `現在比 ${Number.isFinite(pressureDrop)?formatSigned(pressureDrop)+"hPa":"-"}\\n`+
-    `独立144気温モデルの隣接10分ジャンプ：AI 最大 ${Math.max(...aiJumps).toFixed(2)}℃ / 95% ${multiPercentile(aiJumps,.95).toFixed(2)}℃、`+
-      `採用曲線 最大 ${Math.max(...adoptedJumps).toFixed(2)}℃ / 95% ${multiPercentile(adoptedJumps,.95).toFixed(2)}℃`;
+      `現在比 ${Number.isFinite(pressureDrop)?formatSigned(pressureDrop)+"hPa":"-"}\n`+
+    `連続性監査：気温AI 最大 ${fmtJump(aiTempJump.max,"℃")} / 95% ${fmtJump(aiTempJump.p95,"℃")}`+
+      `、採用気温 最大 ${fmtJump(adoptedTempJump.max,"℃")} / 95% ${fmtJump(adoptedTempJump.p95,"℃")}`+
+      `、採用湿度 最大 ${fmtJump(humidityJump.max,"pt")} / 採用気圧 最大 ${fmtJump(pressureJump.max,"hPa")}\n`+
+    `採用方式の隣接切替：気温 ${methodSwitchCount(points,"temperatureMethod")}回 / 湿度 ${methodSwitchCount(points,"humidityMethod")}回 / `+
+      `気圧 ${methodSwitchCount(points,"pressureMethod")}回 / 風 ${methodSwitchCount(points,"windMethod")}回 / 突風 ${methodSwitchCount(points,"gustMethod")}回\n`+
+    `降水window整合性監査：30分>1h または 1h>3h の逆転 ${riskViolations}箇所`+
+      `${riskViolations?` / 最大逆転 ${(maxRiskInversion*100).toFixed(1)}pt`:""}（raw scoreは改変せず表示）`;
 }
 
 function renderMultiForecast(){
@@ -4038,16 +5017,25 @@ function renderMultiForecast(){
       return `${ai.toFixed(2)}${unit} / ${base.toFixed(2)} / ${escapeHtml(method)}`;
     };
 
+    const rainCell=prefix=>{
+      const b=m[prefix+"Brier"],bb=m[prefix+"BaseBrier"];
+      const skill=m[prefix+"BrierSkillPct"];
+      const ap=m[prefix+"AP"];
+      const ll=m[prefix+"LogLoss"];
+      return `${b.toFixed(3)} / ${bb.toFixed(3)}`+
+        `<div class="small">skill ${Number.isFinite(skill)?skill.toFixed(1)+"%":"-"} / AP ${Number.isFinite(ap)?ap.toFixed(3):"-"} / logloss ${Number.isFinite(ll)?ll.toFixed(3):"-"}</div>`;
+    };
+
     tr.innerHTML=
       `<td>${h.label}</td>`+
       `<td>${adoptCell("humidity","pt")}</td>`+
       `<td>${adoptCell("pressure","hPa")}</td>`+
       `<td>${adoptCell("wind","m/s")}</td>`+
       `<td>${adoptCell("gust","m/s")}</td>`+
-      `<td>${m.rainBrier.toFixed(3)} / ${m.rainBaseBrier.toFixed(3)}</td>`+
-      `<td>${m.rain30Brier.toFixed(3)} / ${m.rain30BaseBrier.toFixed(3)}</td>`+
-      `<td>${m.rain60Brier.toFixed(3)} / ${m.rain60BaseBrier.toFixed(3)}</td>`+
-      `<td>${m.rain180Brier.toFixed(3)} / ${m.rain180BaseBrier.toFixed(3)}</td>`;
+      `<td>${rainCell("rain")}</td>`+
+      `<td>${rainCell("rain30")}</td>`+
+      `<td>${rainCell("rain60")}</td>`+
+      `<td>${rainCell("rain180")}</td>`;
     mbody.appendChild(tr);
   }
 
@@ -4255,7 +5243,7 @@ async function runWalkForward(){
         if(!target) continue;
 
         // 予報起点の時点で「正解まで既に判明している」過去サンプルだけを使う。
-        const train=samples.filter(s=>s.targetTs<=origin.ts);
+        const train=prefixSamplesThroughTarget(samples,origin.ts);
 
         if(train.length<300) continue;
 
