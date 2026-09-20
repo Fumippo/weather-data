@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Weather Forecast Lab v8.2</title>
+<title>Weather Forecast Lab v8.3</title>
 <style>
 :root{
   --bg:#0b1020;
@@ -138,10 +138,10 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
 <div class="wrap">
   <div class="hero">
     <div>
-      <h1>Weather Forecast Lab <span style="font-size:.38em;color:var(--muted)">v8.2</span></h1>
+      <h1>Weather Forecast Lab <span style="font-size:.38em;color:var(--muted)">v8.3</span></h1>
       <p>10分値を主軸に、1時間補助観測を時間リークなしで結合し、ΔTモデルを比較検証するブラウザ完結型ダッシュボード</p>
     </div>
-    <div class="badge">v8.2 / 雲量特殊記号 + 微量降水 + availability + A/B実験</div>
+    <div class="badge">v8.3 / 雲量特殊記号 + 微量降水 + availability + A/B実験</div>
   </div>
 
   <div class="grid">
@@ -344,6 +344,79 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
       </div>
     </section>
 
+
+    <section class="panel full">
+      <h2>総合10分刻み予報（実験）</h2>
+      <div class="small">
+        通常の気温144モデルとは別計算です。10分後～24時間後まで144点について、
+        <b>湿度・海面気圧・平均風速・最大瞬間風速・その時刻の降水リスク</b>を直接予測します。
+        その予測値と気温AIから、露点・不快指数・Humidex・Heat Index・体感温度・簡易湿球温度・絶対湿度・VPDを計算します。
+        降水はまだ校正済み確率ではなく<b>risk score</b>です。WBGTは黒球温度等がないため出しません。
+      </div>
+      <div class="actions">
+        <button id="runMultiForecast" class="primary">総合10分予報を計算</button>
+      </div>
+      <div id="multiForecastStatus" class="status">未実行です。通常予報を先に実行してください。</div>
+
+      <div id="multiForecastGrid" class="forecast-grid" style="margin-top:12px"></div>
+
+      <h3>総合予報の固定holdout精度</h3>
+      <div class="table-wrap" style="max-height:330px">
+        <table>
+          <thead>
+            <tr>
+              <th>予測先</th>
+              <th>湿度MAE / 固定</th>
+              <th>気圧MAE / 固定</th>
+              <th>平均風MAE / 固定</th>
+              <th>突風MAE / 固定</th>
+              <th>降水Brier / 現在状態</th>
+            </tr>
+          </thead>
+          <tbody id="multiMetricsBody"><tr><td colspan="6">未実行</td></tr></tbody>
+        </table>
+      </div>
+
+      <div class="actions" style="align-items:center">
+        <label class="small">グラフ指標：</label>
+        <select id="multiMetricSelect">
+          <option value="temperature">気温</option>
+          <option value="humidity">湿度</option>
+          <option value="dewpoint">露点</option>
+          <option value="discomfort" selected>不快指数</option>
+          <option value="apparent">体感温度 AT</option>
+          <option value="humidex">Humidex</option>
+          <option value="heatIndex">Heat Index</option>
+          <option value="wetBulb">簡易湿球温度</option>
+          <option value="absoluteHumidity">絶対湿度</option>
+          <option value="vpd">VPD</option>
+          <option value="pressure">海面気圧</option>
+          <option value="wind">平均風速</option>
+          <option value="gust">最大瞬間風速</option>
+          <option value="rainRisk">降水risk score</option>
+        </select>
+      </div>
+      <div class="chart-wrap"><canvas id="multiForecastChart" width="1250" height="390"></canvas></div>
+
+      <h3>10分刻み総合タイムライン</h3>
+      <div class="small">
+        不快指数などの派生指標は、同じ時刻のAI気温＋実験湿度予測等から逐次計算します。
+        Heat Indexは高温多湿域だけ表示します。簡易湿球温度はStull近似で、公式WBGTではありません。
+      </div>
+      <div class="table-wrap" style="margin-top:10px;max-height:470px">
+        <table>
+          <thead>
+            <tr>
+              <th>時刻</th><th>気温</th><th>湿度</th><th>露点</th><th>不快指数</th>
+              <th>体感AT</th><th>Humidex</th><th>Heat Index</th><th>湿球(簡易)</th>
+              <th>絶対湿度</th><th>VPD</th><th>海面気圧</th><th>平均風</th><th>突風</th><th>降水risk</th>
+            </tr>
+          </thead>
+          <tbody id="multiForecastBody"><tr><td colspan="15">未実行</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
     <section class="panel full">
       <h2>過去検証グラフ</h2>
       <div id="backtestTitle" class="small">時間を選んでください。</div>
@@ -411,7 +484,7 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
         <b>B0=51特徴量 / B1=+日射 / B2=+雲量（特殊表記フラグ含む） / B3=+日射+雲量</b>を同一条件で比較します。
         補助特徴量の欠損補完平均・標準偏差は必ず各foldの学習側だけから計算します。<br>
         <b>注意：</b>この結果を見ながら特徴量を調整した期間は「開発データ」です。
-        v8.2仕様を固定した後に新しく追加される日を、触っていないprospective holdoutとして扱ってください。<br>
+        v8.3仕様を固定した後に新しく追加される日を、触っていないprospective holdoutとして扱ってください。<br>
         B1/B2には値だけでなくage・availabilityフラグも含むため、改善しても「物理量そのものが効いた」とは即断しません。
       </div>
       <div class="actions">
@@ -514,11 +587,14 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
           予測対象期間が学習側へ食い込まないよう、予測時間ぶんの境界を空けています。<br><br>
           <b>日別walk-forward：</b>別ボタンで実行します。各日00:00時点までに判明している情報だけで再学習し、
           その日の未来を予測します。「1日＝1ケース」で集計するため、通常の10分刻みテストより独立性の高い補助評価になります。<br><br>
-          <b>実際の未来予測：</b>全利用可能データで再学習します。v8.2でも本番144モデルの51特徴量AI本体はv7互換です。ただし比較基準は現在値固定だけでなく前日同時刻も候補にし、学習側だけで選びます。<br><br>
+          <b>実際の未来予測：</b>全利用可能データで再学習します。v8.3でも本番144モデルの51特徴量AI本体はv7互換です。ただし比較基準は現在値固定だけでなく前日同時刻も候補にし、学習側だけで選びます。<br><br>
           <b>1時間補助観測：</b>raw → normalized → features を分離し、各値の時間意味論と availability を管理します。
           補助情報はまず代表8 horizonの実験モデルだけへ投入し、本番へ自動昇格させません。<br>
-        <b>v8.2特殊表記：</b>雲量 <code>0+</code> は代表値0.5、<code>10-</code> は代表値9.5としてモデルへ渡しますが、raw記号と特殊表記フラグを残します。
+        <b>v8.3特殊表記：</b>雲量 <code>0+</code> は代表値0.5、<code>10-</code> は代表値9.5としてモデルへ渡しますが、raw記号と特殊表記フラグを残します。
         降水量 <code>0.0</code> は累積量を水増しせず0mmのまま、降水現象フラグだけ1として扱います。<br><br>
+          <b>総合10分刻み予報：</b>別ボタンで、湿度・海面気圧・平均風速・最大瞬間風速・降水riskを
+          10分後～24時間後まで144点直接予測します。気温AIとの組合せから不快指数・露点・Humidex・Heat Index・
+          体感温度・簡易湿球温度・絶対湿度・VPDを算出します。WBGTは必要観測が不足するため公式値としては出しません。<br><br>
           <b>採用予報：</b>各予測時間について、AIと基準予報の過去検証MAEを比較して暫定採用します。
           基準予報は「現在値固定」と「前日同時刻」のどちらを使うかを学習側だけで決め、テストを見て都合よく切り替えません。
         </div>
@@ -535,7 +611,7 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
         風向は16方位を東西/南北ベクトルへ変換、最大瞬間風は突風増幅量と1時間/3時間最大値、
         日照は30分/1時間/3時間累積、気温・気圧・湿度・風速は複数時間差を使用します。<br><br>
         <b>本番特徴量数：</b><span id="featureCountText"></span><br><br>
-        <b>v8.2実験候補：</b>全天日射量（最新・age・3時間累積・availability）、
+        <b>v8.3実験候補：</b>全天日射量（最新・age・3時間累積・availability）、
         雲量（最新・age・availability）。露点・蒸気圧・視程・天気はnormalized層へ保存しますが、
         初期A/Bではまだ投入しません。
       </div>
@@ -646,9 +722,9 @@ const FEATURE_NAMES = [
 ];
 
 
-const PARSER_VERSION = "8.2.0";
+const PARSER_VERSION = "8.3.0";
 
-// 1時間値のうち、v8.2 A/Bで使う特徴群。
+// 1時間値のうち、v8.3 A/Bで使う特徴群。
 // raw/normalized層では露点・蒸気圧・視程・天気等も保持する。
 const AUX_VARIANTS = [
   {id:"B0",label:"B0 51特徴量",groups:[]},
@@ -708,7 +784,7 @@ let stationContextCache = null;
 let latestFeatureCache = null;
 let walkForwardResults = new Map();
 
-// v8.2: 1時間補助観測は10分値とは別レイヤー
+// v8.3: 1時間補助観測は10分値とは別レイヤー
 let stagedHourlyFiles = [];
 let currentHourlyRows = [];
 let currentHourlyTsv = "";
@@ -719,6 +795,12 @@ let hourlyDuplicateCount = 0;
 let hourlyDuplicateConflictCount = 0;
 let auxAblationResults = [];
 let auxWalkForwardResults = [];
+
+// v8.3: 10分刻み総合予報
+let multiForecastResults = new Map();
+let multiForecastRunning = false;
+let auxWalkForwardRunning = false;
+let auxAblationRunning = false;
 
 
 setToday();
@@ -983,6 +1065,8 @@ $("run").addEventListener("click", runAll);
 $("walkForwardBtn").addEventListener("click", runWalkForward);
 $("runAuxAblation").addEventListener("click", runAuxAblation);
 $("runAuxWalkForward").addEventListener("click", runAuxWalkForward);
+$("runMultiForecast").addEventListener("click", runMultiForecast);
+$("multiMetricSelect").addEventListener("change", drawMultiForecastChart);
 $("walkForwardHorizon").addEventListener("change", renderWalkForwardDetail);
 $("backtestHorizon").addEventListener("change", renderSelectedBacktest);
 $("explainHorizon").addEventListener("change", renderExplanation);
@@ -1364,7 +1448,7 @@ function parseHourlyTsvRows(text,sourceName=""){
     const lag=toNumber(get(v,"availability_lag_min"));
     const savedAvailable=parseIsoMs(get(v,"available_at_iso"));
 
-    // v8.2ではrawを真実の出発点にする。
+    // v8.3ではrawを真実の出発点にする。
     // 旧v8.0/v8.1 TSVで10-がnumeric欠損でも、raw="10-"から9.5へ再解釈できる。
     const cloudRaw=get(v,"cloud_amount_raw");
     const reparsedCloud=parseCloudNumeric(cloudRaw);
@@ -1686,7 +1770,7 @@ function buildAuxFeatureAt(station,originTs,variantId,audit=null){
       const validTo=getHourlyValidTo(latestObs,"cloudRaw");
       rawCloudAge=(originTs-validTo)/60000;
 
-      // ここはv8.2でも維持する重要ルール。
+      // ここはv8.3でも維持する重要ルール。
       // 最新観測が 10- 等で数値化不能なら missing とし、過去の数値へ遡らない。
       if(!Number.isFinite(latestObs.cloudNumeric)){
         if(audit) audit.cloudUnparseableLatest++;
@@ -1870,6 +1954,12 @@ async function runAll(){
 
       auxAblationResults=[];
       auxWalkForwardResults=[];
+      multiForecastResults=new Map();
+      $("multiForecastBody").innerHTML='<tr><td colspan="15">未実行</td></tr>';
+      $("multiMetricsBody").innerHTML='<tr><td colspan="6">未実行</td></tr>';
+      $("multiForecastGrid").innerHTML="";
+      clearCanvas($("multiForecastChart"));
+      $("multiForecastStatus").textContent="未実行です。通常予報が更新されたため再計算してください。";
       $("auxAblationBody").innerHTML='<tr><td colspan="8">未実行</td></tr>';
       $("auxWalkForwardBody").innerHTML='<tr><td colspan="12">未実行</td></tr>';
       $("auxOriginBody").innerHTML='<tr><td colspan="6">未実行</td></tr>';
@@ -1969,7 +2059,7 @@ async function runAll(){
       renderDataSummary(globalRows);
       renderHourlyDiagnostics();
 
-      // ---- 本番51特徴量：AI本体はv7互換。baseline評価はv8.2でも強化版 ----
+      // ---- 本番51特徴量：AI本体はv7互換。baseline評価はv8.3でも強化版 ----
       modelResults=new Map();
 
       for(let i=0;i<ALL_HORIZONS.length;i++){
@@ -1998,7 +2088,7 @@ async function runAll(){
         ` / 1時間補助 ${stagedHourlyFiles.length}過去TSV${currentHourlyIncluded ? " + 今日入力" : ""}\n`+
         `10分観測 ${globalRows.length.toLocaleString()}行 / ${countDays(globalRows)}日 / 重複除去 ${duplicateCount.toLocaleString()}行\n`+
         `1時間補助 ${globalHourlyRows.length.toLocaleString()}行 / ${countDays(globalHourlyRows)}日\n`+
-        `本番モデル 144本 / 本番特徴量 ${FEATURE_NAMES.length}個 / 51特徴量のAI本体はv7互換 / 基準予報は強化版\n`+
+        `本番モデル 144本 / 本番特徴量 ${FEATURE_NAMES.length}個 / 51特徴量構造はv7系（降水特殊値の意味論はv8.3で修正済み） / 基準予報は強化版\n`+
         `10分availability 0分lag（v7互換・未確認） / 季節特徴 ${useSeasonFeatures ? "ON" : "OFF（90日未満）"}\n`+
         `通常計算時間 ${elapsed.toFixed(2)}秒`;
     }catch(e){
@@ -2510,7 +2600,7 @@ function makeFeature(cur,map){
   const gustMax60=maxField(w60,"gust");
   const gustMax180=maxField(w180,"gust");
 
-  // v8.2: 0.0（0.5mm未満の微量降水）も「降水現象あり」として扱う。
+  // v8.3: 0.0（0.5mm未満の微量降水）も「降水現象あり」として扱う。
   // 一方、累積量は勝手に0.25mm等へ水増しせず、amount=0のまま。
   const isRainOccurrence=r=>(
     r?.precipOccurred===1 ||
@@ -2840,12 +2930,18 @@ function trainExtendedHoldout(steps,variantId){
 }
 
 async function runAuxAblation(){
+  if(auxAblationRunning){
+    $("auxExperimentStatus").textContent="A/B実験は計算中です。二重実行はしません。";
+    return;
+  }
   if(!globalRows.length || !modelResults.size){
     $("auxExperimentStatus").textContent="先に通常の統合・学習を実行してください。";
     return;
   }
 
   const started=performance.now();
+  auxAblationRunning=true;
+  $("runAuxAblation").disabled=true;
 
   try{
     auxAblationResults=[];
@@ -2881,10 +2977,13 @@ async function runAuxAblation(){
     const elapsed=(performance.now()-started)/1000;
     $("auxExperimentStatus").textContent=
       `A/B完了：代表8 horizon × ${AUX_VARIANTS.length}構成 / ${elapsed.toFixed(2)}秒\n`+
-      `B0は本番v7互換51特徴量の結果をそのまま参照。B1-B3のみ補助特徴を追加。\n`+
+      `B0は本番51特徴量の結果をそのまま参照。B1-B3のみ補助特徴を追加。\n`+
       `※この結果は開発診断です。良かった構成を自動で本番144モデルへ昇格させません。`;
   }catch(e){
     $("auxExperimentStatus").textContent="A/Bエラー\n"+e.message;
+  }finally{
+    auxAblationRunning=false;
+    $("runAuxAblation").disabled=false;
   }
 }
 
@@ -2937,6 +3036,10 @@ function prefixSamplesThroughTarget(samples,cutoffTs){
 }
 
 async function runAuxWalkForward(){
+  if(auxWalkForwardRunning){
+    $("auxExperimentStatus").textContent="4起点walk-forwardは計算中です。二重実行はしません。";
+    return;
+  }
   if(!globalRows.length || !modelResults.size){
     $("auxExperimentStatus").textContent="先に通常の統合・学習を実行してください。";
     return;
@@ -2948,6 +3051,8 @@ async function runAuxWalkForward(){
   }
 
   const started=performance.now();
+  auxWalkForwardRunning=true;
+  $("runAuxWalkForward").disabled=true;
 
   try{
     auxWalkForwardResults=[];
@@ -3143,6 +3248,9 @@ async function runAuxWalkForward(){
       `各構成の日勝率と起点時刻別のB0差を表示しています。`;
   }catch(e){
     $("auxExperimentStatus").textContent="walk-forwardエラー\n"+e.message;
+  }finally{
+    auxWalkForwardRunning=false;
+    $("runAuxWalkForward").disabled=false;
   }
 }
 
@@ -3215,6 +3323,490 @@ function renderAuxWalkForward(){
       obody.appendChild(otr);
     }
   }
+}
+
+
+function clampNumber(v,lo,hi){
+  return Math.min(hi,Math.max(lo,v));
+}
+
+function isRainOccurrenceRow(r){
+  return (
+    r?.precipOccurred===1 ||
+    (r?.precipOccurred==null && Number.isFinite(r?.precip) && r.precip>0)
+  );
+}
+
+function buildMultiTargetSamples(rows,steps){
+  const out=[];
+  const contexts=(rows===globalRows && stationContextCache)
+    ? [...stationContextCache.values()]
+    : [...groupByStation(rows).values()].map(stationRows0=>{
+        const stationRows=[...stationRows0].sort((a,b)=>a.ts-b.ts);
+        return {rows:stationRows,map:new Map(stationRows.map(r=>[r.ts,r]))};
+      });
+
+  for(const ctx of contexts){
+    const map=ctx.map;
+    for(const cur of ctx.rows){
+      const x=makeFeature(cur,map);
+      const target=map.get(cur.ts+steps*10*60000);
+      if(!x || !target) continue;
+
+      if(
+        !Number.isFinite(cur.humidity) || !Number.isFinite(target.humidity) ||
+        !Number.isFinite(cur.pressure) || !Number.isFinite(target.pressure) ||
+        !Number.isFinite(cur.wind) || !Number.isFinite(target.wind) ||
+        !Number.isFinite(cur.gust) || !Number.isFinite(target.gust)
+      ) continue;
+
+      out.push({
+        x,
+        y:[
+          target.humidity-cur.humidity,
+          target.pressure-cur.pressure,
+          target.wind-cur.wind,
+          target.gust-cur.gust,
+          isRainOccurrenceRow(target)?1:0
+        ],
+        station:cur.station,
+        ts:cur.ts,
+        targetTs:target.ts,
+        current:{
+          humidity:cur.humidity,
+          pressure:cur.pressure,
+          wind:cur.wind,
+          gust:cur.gust,
+          rain:isRainOccurrenceRow(cur)?1:0
+        },
+        target:{
+          humidity:target.humidity,
+          pressure:target.pressure,
+          wind:target.wind,
+          gust:target.gust,
+          rain:isRainOccurrenceRow(target)?1:0
+        }
+      });
+    }
+  }
+  return out.sort((a,b)=>a.ts-b.ts);
+}
+
+function solveLinearSystemMulti(A,B){
+  const n=A.length;
+  const q=B[0]?.length||0;
+  const M=A.map((row,i)=>[...row,...B[i]]);
+
+  for(let col=0;col<n;col++){
+    let pivot=col;
+    for(let r=col+1;r<n;r++){
+      if(Math.abs(M[r][col])>Math.abs(M[pivot][col])) pivot=r;
+    }
+    if(Math.abs(M[pivot][col])<1e-12) continue;
+    if(pivot!==col) [M[pivot],M[col]]=[M[col],M[pivot]];
+
+    const d=M[col][col];
+    for(let j=col;j<n+q;j++) M[col][j]/=d;
+
+    for(let r=0;r<n;r++){
+      if(r===col) continue;
+      const f=M[r][col];
+      if(Math.abs(f)<1e-15) continue;
+      for(let j=col;j<n+q;j++) M[r][j]-=f*M[col][j];
+    }
+  }
+
+  return Array.from({length:n},(_,i)=>
+    Array.from({length:q},(_,k)=>M[i][n+k])
+  );
+}
+
+function trainMultiTargetRidge(samples,lambda){
+  const n=samples.length;
+  const p=samples[0].x.length;
+  const q=samples[0].y.length;
+  const xMean=Array(p).fill(0);
+  const xStd=Array(p).fill(0);
+
+  for(const s of samples){
+    for(let j=0;j<p;j++) xMean[j]+=s.x[j];
+  }
+  for(let j=0;j<p;j++) xMean[j]/=n;
+
+  for(const s of samples){
+    for(let j=0;j<p;j++){
+      const d=s.x[j]-xMean[j];
+      xStd[j]+=d*d;
+    }
+  }
+  for(let j=0;j<p;j++){
+    xStd[j]=Math.sqrt(xStd[j]/n);
+    if(xStd[j]<1e-9) xStd[j]=1;
+  }
+
+  const yMean=Array(q).fill(0);
+  const yStd=Array(q).fill(0);
+  for(const s of samples){
+    for(let k=0;k<q;k++) yMean[k]+=s.y[k];
+  }
+  for(let k=0;k<q;k++) yMean[k]/=n;
+
+  for(const s of samples){
+    for(let k=0;k<q;k++){
+      const d=s.y[k]-yMean[k];
+      yStd[k]+=d*d;
+    }
+  }
+  for(let k=0;k<q;k++){
+    yStd[k]=Math.sqrt(yStd[k]/n);
+    if(yStd[k]<1e-9) yStd[k]=1;
+  }
+
+  const A=Array.from({length:p},()=>Array(p).fill(0));
+  const B=Array.from({length:p},()=>Array(q).fill(0));
+  const z=Array(p).fill(0);
+
+  for(const s of samples){
+    for(let j=0;j<p;j++) z[j]=(s.x[j]-xMean[j])/xStd[j];
+
+    for(let j=0;j<p;j++){
+      const zj=z[j];
+      for(let m=j;m<p;m++) A[j][m]+=zj*z[m];
+      for(let k=0;k<q;k++){
+        const ty=(s.y[k]-yMean[k])/yStd[k];
+        B[j][k]+=zj*ty;
+      }
+    }
+  }
+
+  for(let j=0;j<p;j++){
+    for(let m=j+1;m<p;m++) A[m][j]=A[j][m];
+    A[j][j]+=lambda*n;
+  }
+
+  return {xMean,xStd,yMean,yStd,W:solveLinearSystemMulti(A,B)};
+}
+
+function predictMultiTarget(model,x){
+  const q=model.yMean.length;
+  const out=[...model.yMean];
+
+  for(let k=0;k<q;k++){
+    let z=0;
+    for(let j=0;j<model.W.length;j++){
+      z+=model.W[j][k]*((x[j]-model.xMean[j])/model.xStd[j]);
+    }
+    out[k]+=model.yStd[k]*z;
+  }
+  return out;
+}
+
+function brierScore(actual,pred){
+  if(!actual.length) return NaN;
+  let s=0;
+  for(let i=0;i<actual.length;i++){
+    const d=pred[i]-actual[i];
+    s+=d*d;
+  }
+  return s/actual.length;
+}
+
+function multiMetricsFromPred(T,RH,wind){
+  RH=clampNumber(RH,1,100);
+  const es=6.112*Math.exp((17.67*T)/(T+243.5));
+  const e=RH/100*es;
+
+  const a=17.625,b=243.04;
+  const gamma=Math.log(RH/100)+(a*T)/(b+T);
+  const dewpoint=b*gamma/(a-gamma);
+
+  const discomfort=0.81*T+0.01*RH*(0.99*T-14.3)+46.3;
+  const absoluteHumidity=216.7*e/(T+273.15);
+  const vpd=(es-e)/10;
+  const humidex=T+(5/9)*(e-10);
+  const apparent=T+0.33*e-0.70*Math.max(0,wind)-4.0;
+
+  const wetBulb=
+    T*Math.atan(0.151977*Math.sqrt(RH+8.313659))+
+    Math.atan(T+RH)-
+    Math.atan(RH-1.676331)+
+    0.00391838*Math.pow(RH,1.5)*Math.atan(0.023101*RH)-
+    4.686035;
+
+  let heatIndex=NaN;
+  if(T>=26.7 && RH>=40){
+    const Tf=T*9/5+32;
+    const R=RH;
+    const hiF=
+      -42.379+2.04901523*Tf+10.14333127*R-
+      0.22475541*Tf*R-0.00683783*Tf*Tf-
+      0.05481717*R*R+0.00122874*Tf*Tf*R+
+      0.00085282*Tf*R*R-0.00000199*Tf*Tf*R*R;
+    heatIndex=(hiF-32)*5/9;
+  }
+
+  return {
+    dewpoint,discomfort,absoluteHumidity,vpd,humidex,
+    apparent,wetBulb,heatIndex,vaporPressure:e
+  };
+}
+
+function discomfortLabel(v){
+  if(!Number.isFinite(v)) return "-";
+  if(v<55) return "寒い";
+  if(v<60) return "肌寒い";
+  if(v<65) return "何も感じない";
+  if(v<70) return "快適";
+  if(v<75) return "暑くない";
+  if(v<80) return "やや暑い";
+  if(v<85) return "暑くて汗";
+  return "かなり不快";
+}
+
+function rainRiskLabel(v){
+  if(!Number.isFinite(v)) return "-";
+  if(v<0.20) return "低";
+  if(v<0.50) return "中";
+  if(v<0.75) return "高";
+  return "非常に高";
+}
+
+function getLatestRowForMulti(){
+  if(!globalRows.length) return null;
+  const latest=globalRows.at(-1);
+  const ctx=stationContextCache?.get(latest.station);
+  return ctx?.map?.get(latest.ts) || latest;
+}
+
+function trainMultiForecastHorizon(steps){
+  const samples=buildMultiTargetSamples(globalRows,steps);
+  if(samples.length<120) return {ok:false,error:"学習サンプル不足"};
+
+  const splitIndex=Math.floor(samples.length*0.8);
+  const testStartTs=samples[splitIndex]?.ts;
+  if(!Number.isFinite(testStartTs)) return {ok:false,error:"検証区間を作れません"};
+
+  const train=samples.filter(s=>s.targetTs<testStartTs);
+  const test=samples.filter(s=>s.ts>=testStartTs);
+  if(train.length<80 || test.length<20) return {ok:false,error:"検証サンプル不足"};
+
+  const evalModel=trainMultiTargetRidge(train,0.8);
+  const evalPred=test.map(s=>predictMultiTarget(evalModel,s.x));
+
+  const hPred=[],hAct=[],pPred=[],pAct=[],wPred=[],wAct=[],gPred=[],gAct=[],rPred=[],rAct=[],rBase=[];
+  for(let i=0;i<test.length;i++){
+    const s=test[i],z=evalPred[i];
+    hPred.push(clampNumber(s.current.humidity+z[0],0,100)); hAct.push(s.target.humidity);
+    pPred.push(s.current.pressure+z[1]); pAct.push(s.target.pressure);
+    wPred.push(Math.max(0,s.current.wind+z[2])); wAct.push(s.target.wind);
+    gPred.push(Math.max(wPred.at(-1),s.current.gust+z[3])); gAct.push(s.target.gust);
+    rPred.push(clampNumber(z[4],0,1)); rAct.push(s.target.rain); rBase.push(s.current.rain);
+  }
+
+  const latest=getLatestRowForMulti();
+  const latestFeature=buildLatestFeature(globalRows);
+  if(!latest || !latestFeature?.ok) return {ok:false,error:"最新特徴量を作れません"};
+
+  const finalModel=trainMultiTargetRidge(samples,0.8);
+  const z=predictMultiTarget(finalModel,latestFeature.x);
+
+  const humidity=clampNumber(latest.humidity+z[0],0,100);
+  const pressure=latest.pressure+z[1];
+  const wind=Math.max(0,latest.wind+z[2]);
+  const gust=Math.max(wind,latest.gust+z[3]);
+  const rainRisk=clampNumber(z[4],0,1);
+
+  return {
+    ok:true,steps,
+    trainCount:train.length,testCount:test.length,
+    forecast:{humidity,pressure,wind,gust,rainRisk},
+    metrics:{
+      humidityMae:mae(hAct,hPred),
+      humidityBaseMae:mae(hAct,test.map(s=>s.current.humidity)),
+      pressureMae:mae(pAct,pPred),
+      pressureBaseMae:mae(pAct,test.map(s=>s.current.pressure)),
+      windMae:mae(wAct,wPred),
+      windBaseMae:mae(wAct,test.map(s=>s.current.wind)),
+      gustMae:mae(gAct,gPred),
+      gustBaseMae:mae(gAct,test.map(s=>s.current.gust)),
+      rainBrier:brierScore(rAct,rPred),
+      rainBaseBrier:brierScore(rAct,rBase)
+    }
+  };
+}
+
+async function runMultiForecast(){
+  if(multiForecastRunning){
+    $("multiForecastStatus").textContent="総合10分予報は計算中です。二重実行はしません。";
+    return;
+  }
+  if(!globalRows.length || !modelResults.size){
+    $("multiForecastStatus").textContent="先に「統合・学習・多時間予測」を実行してください。";
+    return;
+  }
+
+  const started=performance.now();
+  multiForecastRunning=true;
+  $("runMultiForecast").disabled=true;
+  const local=new Map();
+
+  try{
+    for(let i=0;i<ALL_HORIZONS.length;i++){
+      const h=ALL_HORIZONS[i];
+      if(i===0 || i%6===0 || i===ALL_HORIZONS.length-1){
+        $("multiForecastStatus").textContent=
+          `総合10分予報を計算中... ${h.label}後 (${h.steps}/144)`;
+        await nextFrame();
+      }
+      local.set(h.steps,trainMultiForecastHorizon(h.steps));
+    }
+
+    multiForecastResults=local;
+    renderMultiForecast();
+
+    const sec=(performance.now()-started)/1000;
+    const ok=[...local.values()].filter(r=>r.ok).length;
+    $("multiForecastStatus").textContent=
+      `完了：${ok}/144 horizon / ${sec.toFixed(2)}秒\n`+
+      `湿度・気圧・風・突風はΔ直接回帰、降水はその時刻のrisk score（未校正）。\n`+
+      `精度表では現在値固定（降水は現在状態維持）を基準に比較します。\n`+
+      `派生指標はAI気温と総合予報の同時刻値から計算。通常の気温144モデルとは別実験です。`;
+  }catch(e){
+    $("multiForecastStatus").textContent="総合予報エラー\n"+e.message;
+  }finally{
+    multiForecastRunning=false;
+    $("runMultiForecast").disabled=false;
+  }
+}
+
+function buildMultiPoint(h){
+  const temp=modelResults.get(h.steps);
+  const m=multiForecastResults.get(h.steps);
+  if(!temp?.ok || !m?.ok) return null;
+
+  const T=temp.forecast;
+  const H=m.forecast.humidity;
+  const W=m.forecast.wind;
+
+  return {
+    ts:temp.latestTs+h.minutes*60000,
+    temperature:T,
+    humidity:H,
+    pressure:m.forecast.pressure,
+    wind:W,
+    gust:m.forecast.gust,
+    rainRisk:m.forecast.rainRisk,
+    ...multiMetricsFromPred(T,H,W)
+  };
+}
+
+function renderMultiForecast(){
+  const body=$("multiForecastBody");
+  body.innerHTML="";
+  const points=ALL_HORIZONS.map(buildMultiPoint).filter(Boolean);
+
+  if(!points.length){
+    body.innerHTML='<tr><td colspan="15">総合予報を作れませんでした。</td></tr>';
+    $("multiForecastGrid").innerHTML="";
+    clearCanvas($("multiForecastChart"));
+    return;
+  }
+
+  for(const p of points){
+    const tr=document.createElement("tr");
+    tr.innerHTML=
+      `<td>${formatShort(p.ts)}</td>`+
+      `<td>${p.temperature.toFixed(1)} ℃</td>`+
+      `<td>${p.humidity.toFixed(0)} %</td>`+
+      `<td>${p.dewpoint.toFixed(1)} ℃</td>`+
+      `<td><b>${p.discomfort.toFixed(1)}</b> <span class="small">${discomfortLabel(p.discomfort)}</span></td>`+
+      `<td>${p.apparent.toFixed(1)} ℃</td>`+
+      `<td>${p.humidex.toFixed(1)}</td>`+
+      `<td>${Number.isFinite(p.heatIndex)?p.heatIndex.toFixed(1)+" ℃":"-"}</td>`+
+      `<td>${p.wetBulb.toFixed(1)} ℃</td>`+
+      `<td>${p.absoluteHumidity.toFixed(1)} g/m³</td>`+
+      `<td>${p.vpd.toFixed(2)} kPa</td>`+
+      `<td>${p.pressure.toFixed(1)} hPa</td>`+
+      `<td>${p.wind.toFixed(1)} m/s</td>`+
+      `<td>${p.gust.toFixed(1)} m/s</td>`+
+      `<td>${Math.round(p.rainRisk*100)} <span class="small">score / ${rainRiskLabel(p.rainRisk)}</span></td>`;
+    body.appendChild(tr);
+  }
+
+  const mbody=$("multiMetricsBody");
+  mbody.innerHTML="";
+  for(const h of DISPLAY_HORIZONS){
+    const mr=multiForecastResults.get(h.steps);
+    if(!mr?.ok) continue;
+    const m=mr.metrics;
+    const tr=document.createElement("tr");
+    tr.innerHTML=
+      `<td>${h.label}</td>`+
+      `<td>${m.humidityMae.toFixed(2)}pt / ${m.humidityBaseMae.toFixed(2)}</td>`+
+      `<td>${m.pressureMae.toFixed(2)}hPa / ${m.pressureBaseMae.toFixed(2)}</td>`+
+      `<td>${m.windMae.toFixed(2)}m/s / ${m.windBaseMae.toFixed(2)}</td>`+
+      `<td>${m.gustMae.toFixed(2)}m/s / ${m.gustBaseMae.toFixed(2)}</td>`+
+      `<td>${m.rainBrier.toFixed(3)} / ${m.rainBaseBrier.toFixed(3)}</td>`;
+    mbody.appendChild(tr);
+  }
+
+  const grid=$("multiForecastGrid");
+  grid.innerHTML="";
+  for(const h of DISPLAY_HORIZONS){
+    const p=buildMultiPoint(h);
+    const mr=multiForecastResults.get(h.steps);
+    if(!p||!mr?.ok) continue;
+
+    const card=document.createElement("div");
+    card.className="forecast-card";
+    card.innerHTML=
+      `<div class="h">${h.label}後 / ${formatShort(p.ts)}</div>`+
+      `<div class="temp">${p.temperature.toFixed(1)} ℃</div>`+
+      `<div class="sub">湿度 ${p.humidity.toFixed(0)}% / 露点 ${p.dewpoint.toFixed(1)}℃</div>`+
+      `<div class="sub"><b>不快指数 ${p.discomfort.toFixed(1)}</b>（${discomfortLabel(p.discomfort)}）</div>`+
+      `<div class="sub">体感AT ${p.apparent.toFixed(1)}℃ / 湿球 ${p.wetBulb.toFixed(1)}℃</div>`+
+      `<div class="sub">気圧 ${p.pressure.toFixed(1)}hPa / 風 ${p.wind.toFixed(1)} / 突風 ${p.gust.toFixed(1)}m/s</div>`+
+      `<div class="sub">降水risk ${Math.round(p.rainRisk*100)} score（${rainRiskLabel(p.rainRisk)}）</div>`+
+      `<div class="sub">湿度MAE ${mr.metrics.humidityMae.toFixed(1)}pt / 気圧MAE ${mr.metrics.pressureMae.toFixed(2)}hPa</div>`;
+    grid.appendChild(card);
+  }
+
+  drawMultiForecastChart();
+}
+
+function drawMultiForecastChart(){
+  if(!$("multiForecastChart")) return;
+  const metric=$("multiMetricSelect")?.value||"discomfort";
+  const points=ALL_HORIZONS.map(buildMultiPoint).filter(Boolean);
+  if(!points.length){
+    clearCanvas($("multiForecastChart"));
+    return;
+  }
+
+  const meta={
+    temperature:["気温","℃"],
+    humidity:["湿度","%"],
+    dewpoint:["露点","℃"],
+    discomfort:["不快指数",""],
+    apparent:["体感温度 AT","℃"],
+    humidex:["Humidex",""],
+    heatIndex:["Heat Index","℃"],
+    wetBulb:["簡易湿球温度","℃"],
+    absoluteHumidity:["絶対湿度","g/m³"],
+    vpd:["VPD","kPa"],
+    pressure:["海面気圧","hPa"],
+    wind:["平均風速","m/s"],
+    gust:["最大瞬間風速","m/s"],
+    rainRisk:["降水risk score",""]
+  }[metric];
+
+  const seriesPoints=points
+    .filter(p=>Number.isFinite(p[metric]))
+    .map(p=>({x:p.ts,y:metric==="rainRisk"?p[metric]*100:p[metric]}));
+
+  drawTimeChart($("multiForecastChart"),[
+    {label:meta[0],points:seriesPoints,color:"#6ea8fe",width:2.6}
+  ]);
 }
 
 function solveLinearSystem(A,b){
