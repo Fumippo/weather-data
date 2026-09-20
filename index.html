@@ -170,9 +170,19 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
         <span class="small">または下から複数選択</span>
       </div>
       <input id="historyFiles" type="file" accept=".tsv,.txt" multiple style="margin-top:10px">
+
+      <label style="margin-top:10px;color:var(--text)">
+        <input id="preferFilenameDate" type="checkbox" checked style="width:auto;margin-right:6px">
+        ファイル名の日付（YYYY-MM-DD）を優先して読み込む
+      </label>
+      <div class="small">
+        「ファイル名は7/2なのに内部dateが7/1」のような既存TSVを自動補正します。
+      </div>
+
       <div class="actions">
         <button id="clearFiles" class="danger">過去TSVを全解除</button>
         <button id="run" class="primary">統合・学習・多時間予測</button>
+        <button id="downloadMerged" class="ghost">補正済み統合TSVを保存</button>
       </div>
       <div id="fileList" class="file-list"></div>
       <div id="runStatus" class="status">過去TSVを選択してください。</div>
@@ -199,6 +209,27 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
         <div class="kpi"><div class="label">最新観測</div><div id="latestKpi" class="value" style="font-size:1rem">-</div></div>
         <div class="kpi"><div class="label">最新気温</div><div id="latestTempKpi" class="value">-</div></div>
         <div class="kpi"><div class="label">地点</div><div id="stationKpi" class="value" style="font-size:1rem">-</div></div>
+      </div>
+    </section>
+
+    <section class="panel full">
+      <h2>データ診断</h2>
+      <div id="diagnosticSummary" class="status">まだ診断していません。</div>
+      <div class="table-wrap" style="margin-top:10px">
+        <table>
+          <thead>
+            <tr>
+              <th>ファイル</th>
+              <th>ファイル名日付</th>
+              <th>内部date</th>
+              <th>行数</th>
+              <th>先頭</th>
+              <th>末尾</th>
+              <th>判定</th>
+            </tr>
+          </thead>
+          <tbody id="diagnosticBody"></tbody>
+        </table>
       </div>
     </section>
 
@@ -307,8 +338,18 @@ let currentRows = [];
 let currentTsv = "";
 let globalRows = [];
 let modelResults = new Map();
+let sourceDiagnostics = [];
+let useSeasonFeatures = false;
 
 setToday();
+
+["date","station","raw"].forEach(id => {
+  $(id).addEventListener("input", () => {
+    currentRows = [];
+    currentTsv = "";
+    $("convertStatus").textContent = "入力が変更されました。再変換が必要です。";
+  });
+});
 
 $("historyFiles").addEventListener("change", e => {
   stagedFiles = uniqueFiles([...stagedFiles, ...e.target.files]);
@@ -366,12 +407,50 @@ $("convert").addEventListener("click", () => {
 
 $("downloadCurrent").addEventListener("click", () => {
   try{
-    if(!currentTsv) convertCurrentRaw();
+    const parsed = convertCurrentRaw();
     const date = $("date").value.trim();
     const station = $("station").value.trim();
-    download(`${date}_${safeFileName(station)}.tsv`, currentTsv, "text/tab-separated-values;charset=utf-8");
+
+    download(
+      `${date}_${safeFileName(station)}.tsv`,
+      parsed.tsv,
+      "text/tab-separated-values;charset=utf-8"
+    );
+
+    $("convertStatus").textContent =
+      `現在の入力から再変換して保存しました。\n${date}_${safeFileName(station)}.tsv`;
   }catch(e){
     $("convertStatus").textContent = "エラー\n" + e.message;
+  }
+});
+
+$("downloadMerged").addEventListener("click", () => {
+  try{
+    if(!globalRows.length){
+      throw new Error("先に「統合・学習・多時間予測」を実行してください。");
+    }
+
+    const header=[
+      "date","station","time","temperature_c","humidity_pct",
+      "pressure_sea_hpa","wind_speed_ms","sunshine_min"
+    ];
+
+    const lines=[header.join("\t")];
+
+    for(const r of globalRows){
+      lines.push([
+        r.date,r.station,r.time,
+        r.temperature,r.humidity,r.pressure,r.wind,r.sunshine
+      ].join("\t"));
+    }
+
+    download(
+      "weather_merged_corrected.tsv",
+      lines.join("\n")+"\n",
+      "text/tab-separated-values;charset=utf-8"
+    );
+  }catch(e){
+    $("runStatus").textContent="エラー\n"+e.message;
   }
 });
 
@@ -398,47 +477,82 @@ function renderFileList(){
 }
 
 async function runAll(){
-  try{
-    $("runStatus").textContent="読み込み中...";
-    const all=[];
+  return (async () => {
+    try{
+      $("runStatus").textContent="読み込み・診断中...";
+      const all=[];
+      sourceDiagnostics=[];
 
-    for(const file of stagedFiles){
-      const text=await file.text();
-      all.push(...parseTsvRows(text));
+      const preferFilenameDate = $("preferFilenameDate").checked;
+
+      for(const file of stagedFiles){
+        const text=await file.text();
+
+        const diag=inspectTsvSource(file.name,text);
+        sourceDiagnostics.push(diag);
+
+        all.push(
+          ...parseTsvRows(
+            text,
+            preferFilenameDate ? diag.filenameDate : null,
+            file.name
+          )
+        );
+      }
+
+      let currentIncluded=false;
+
+      if($("raw").value.trim()){
+        const parsed=convertCurrentRaw();
+        all.push(...parsed.rows);
+        currentIncluded=true;
+
+        sourceDiagnostics.push({
+          file:"今日の入力",
+          filenameDate:$("date").value.trim(),
+          internalDates:[$("date").value.trim()],
+          rowCount:parsed.rows.length,
+          firstTs:parsed.rows[0]?.ts ?? NaN,
+          lastTs:parsed.rows.at(-1)?.ts ?? NaN,
+          mismatch:false,
+          isCurrent:true
+        });
+      }
+
+      const beforeDedup=all.length;
+      globalRows=deduplicateRows(all).sort((a,b)=>a.ts-b.ts);
+      const duplicateCount=beforeDedup-globalRows.length;
+
+      if(globalRows.length<100) throw new Error("データが少なすぎます。");
+
+      useSeasonFeatures = countDays(globalRows) >= 90;
+
+      renderDiagnostics(globalRows,duplicateCount,preferFilenameDate);
+      renderDataSummary(globalRows);
+
+      modelResults=new Map();
+
+      for(const h of HORIZONS){
+        $("runStatus").textContent=`学習中... ${h.label}後モデル`;
+        await nextFrame();
+        const result=trainForHorizon(globalRows,h.steps);
+        modelResults.set(h.steps,result);
+      }
+
+      renderMetrics();
+      renderForecastCards();
+      drawForecastChart();
+      renderSelectedBacktest();
+      renderExplanation();
+
+      $("runStatus").textContent =
+        `完了：${stagedFiles.length}個の過去TSV${currentIncluded ? " + 今日の入力" : ""}を統合\n` +
+        `観測 ${globalRows.length.toLocaleString()}行 / 収録 ${countDays(globalRows)}日\n` +
+        `重複除去 ${duplicateCount.toLocaleString()}行 / 季節特徴 ${useSeasonFeatures ? "ON" : "OFF（90日未満）"}`;
+    }catch(e){
+      $("runStatus").textContent="エラー\n"+e.message;
     }
-
-    if($("raw").value.trim()){
-      const parsed=convertCurrentRaw();
-      all.push(...parsed.rows);
-    }
-
-    globalRows=deduplicateRows(all).sort((a,b)=>a.ts-b.ts);
-
-    if(globalRows.length<100) throw new Error("データが少なすぎます。");
-
-    renderDataSummary(globalRows);
-
-    modelResults=new Map();
-
-    for(const h of HORIZONS){
-      $("runStatus").textContent=`学習中... ${h.label}後モデル`;
-      await nextFrame();
-      const result=trainForHorizon(globalRows,h.steps);
-      modelResults.set(h.steps,result);
-    }
-
-    renderMetrics();
-    renderForecastCards();
-    drawForecastChart();
-    renderSelectedBacktest();
-    renderExplanation();
-
-    $("runStatus").textContent =
-      `完了：${stagedFiles.length}個の過去TSV + 今日の入力を統合\n` +
-      `観測 ${globalRows.length.toLocaleString()}行 / ${countDays(globalRows)}日`;
-  }catch(e){
-    $("runStatus").textContent="エラー\n"+e.message;
-  }
+  })();
 }
 
 function convertCurrentRaw(){
@@ -498,41 +612,68 @@ function rawRowToObject(date,station,r){
   return obj;
 }
 
-function parseTsvRows(text){
+function parseTsvRows(text,overrideDate=null,sourceName=""){
   const lines=normalizeNewlines(text).split("\n").filter(x=>x.trim()!=="");
   if(lines.length<2) return [];
+
   const header=lines[0].replace(/^\uFEFF/,"").split("\t");
   const required=["date","station","time","pressure_sea_hpa","temperature_c","humidity_pct","wind_speed_ms","sunshine_min"];
-  for(const n of required) if(!header.includes(n)) throw new Error("TSVに必要な列がありません: "+n);
+
+  for(const n of required){
+    if(!header.includes(n)) throw new Error(`TSVに必要な列がありません: ${n} (${sourceName})`);
+  }
+
   const idx=Object.fromEntries(header.map((n,i)=>[n,i]));
   const out=[];
 
   for(const line of lines.slice(1)){
     const v=line.split("\t");
-    const date=v[idx.date]??"", time=v[idx.time]??"", station=v[idx.station]??"";
+
+    const originalDate=v[idx.date]??"";
+    const date=overrideDate || originalDate;
+    const time=v[idx.time]??"";
+    const station=v[idx.station]??"";
+
     const row={
-      ts:parseDateTime(date,time),date,time,station,
+      ts:parseDateTime(date,time),
+      date,
+      originalDate,
+      time,
+      station,
+      sourceName,
       temperature:toNumber(v[idx.temperature_c]),
       humidity:toNumber(v[idx.humidity_pct]),
       pressure:toNumber(v[idx.pressure_sea_hpa]),
       wind:toNumber(v[idx.wind_speed_ms]),
       sunshine:toNumber(v[idx.sunshine_min])
     };
+
     if(!Number.isFinite(row.sunshine)) row.sunshine=0;
-    if([row.ts,row.temperature,row.humidity,row.pressure,row.wind].every(Number.isFinite)) out.push(row);
+
+    if([row.ts,row.temperature,row.humidity,row.pressure,row.wind].every(Number.isFinite)){
+      out.push(row);
+    }
   }
+
   return out;
 }
 
 function trainForHorizon(rows,steps){
   const samples=buildSamples(rows,steps);
+
   if(samples.length<120){
     return {ok:false,samples,error:"学習サンプル不足"};
   }
 
-  const split=Math.floor(samples.length*.8);
-  const train=samples.slice(0,split);
-  const test=samples.slice(split);
+  const splitIndex=Math.floor(samples.length*.8);
+  const testStartTs=samples[splitIndex]?.ts;
+
+  if(!Number.isFinite(testStartTs)){
+    return {ok:false,samples,error:"検証区間を作れません"};
+  }
+
+  const train=samples.filter(s=>s.targetTs < testStartTs);
+  const test=samples.filter(s=>s.ts >= testStartTs);
 
   if(train.length<80||test.length<20){
     return {ok:false,samples,error:"検証サンプル不足"};
@@ -542,27 +683,48 @@ function trainForHorizon(rows,steps){
   const pred=test.map(s=>predictModel(evalModel,s.x));
   const actual=test.map(s=>s.y);
   const baseline=test.map(s=>s.currentTemp);
+
   const modelMae=mae(actual,pred);
   const baseMae=mae(actual,baseline);
 
-  // 最終予測は全教師データで再学習
-  const finalModel=trainRidgeClosedForm(samples,0.8);
   const latest=buildLatestFeature(rows);
 
-  if(!latest){
-    return {ok:false,samples,error:"最新特徴量を作れません"};
+  if(!latest || latest.ok===false){
+    const missing=latest?.missing?.join("、") || "必要な過去データ";
+
+    return {
+      ok:false,
+      samples,
+      trainCount:train.length,
+      testCount:test.length,
+      error:`最新観測 ${latest ? formatDateTime(latest.ts) : ""} では予測不可：${missing} が欠損`
+    };
   }
 
+  const finalModel=trainRidgeClosedForm(samples,0.8);
   const forecast=predictModel(finalModel,latest.x);
   const contributions=getContributions(finalModel,latest.x);
 
   return {
-    ok:true,steps,samples,trainCount:train.length,testCount:test.length,
-    modelMae,baseMae,improvement:baseMae>0?(baseMae-modelMae)/baseMae*100:0,
-    forecast,latestTs:latest.ts,
-    testActual:actual,testPred:pred,testBase:baseline,
+    ok:true,
+    steps,
+    samples,
+    trainCount:train.length,
+    testCount:test.length,
+    modelMae,
+    baseMae,
+    improvement:baseMae>0?(baseMae-modelMae)/baseMae*100:0,
+    forecast,
+    latestTs:latest.ts,
+    latestTemp:latest.currentTemp,
+    latestStation:latest.station,
+    testActual:actual,
+    testPred:pred,
+    testBase:baseline,
     testTimes:test.map(s=>s.targetTs),
-    model:finalModel,latestX:latest.x,contributions
+    model:finalModel,
+    latestX:latest.x,
+    contributions
   };
 }
 
@@ -583,32 +745,51 @@ function buildSamples(rows,steps){
 }
 
 function buildLatestFeature(rows){
-  const groups=groupByStation(rows);
-  let best=null;
-  for(const stationRows of groups.values()){
-    stationRows.sort((a,b)=>a.ts-b.ts);
-    const map=new Map(stationRows.map(r=>[r.ts,r]));
-    for(let i=stationRows.length-1;i>=0;i--){
-      const cur=stationRows[i],x=makeFeature(cur,map);
-      if(!x) continue;
-      if(!best||cur.ts>best.ts) best={ts:cur.ts,x,station:cur.station,currentTemp:cur.temperature};
-      break;
-    }
+  if(!rows.length) return null;
+
+  const sorted=[...rows].sort((a,b)=>a.ts-b.ts);
+  const absoluteLatest=sorted[sorted.length-1];
+
+  const stationRows=sorted.filter(r=>r.station===absoluteLatest.station);
+  const map=new Map(stationRows.map(r=>[r.ts,r]));
+
+  const x=makeFeature(absoluteLatest,map);
+
+  if(!x){
+    return {
+      ok:false,
+      ts:absoluteLatest.ts,
+      station:absoluteLatest.station,
+      currentTemp:absoluteLatest.temperature,
+      missing:getMissingFeatureLabels(absoluteLatest,map)
+    };
   }
-  return best;
+
+  return {
+    ok:true,
+    ts:absoluteLatest.ts,
+    station:absoluteLatest.station,
+    currentTemp:absoluteLatest.temperature,
+    x
+  };
 }
 
 function makeFeature(cur,map){
   const get=(m)=>map.get(cur.ts-m*60*1000);
   const l10=get(10),l30=get(30),l60=get(60),l180=get(180),l1440=get(1440);
+
   if(!l10||!l30||!l60||!l180||!l1440) return null;
 
   const d=new Date(cur.ts);
   const hour=d.getHours()+d.getMinutes()/60;
   const dayStart=new Date(d.getFullYear(),0,0);
   const doy=Math.floor((d-dayStart)/86400000);
+
   const ha=2*Math.PI*hour/24;
   const da=2*Math.PI*doy/365.25;
+
+  const seasonSin=useSeasonFeatures ? Math.sin(da) : 0;
+  const seasonCos=useSeasonFeatures ? Math.cos(da) : 0;
 
   const x=[
     cur.temperature,cur.humidity,cur.pressure,cur.wind,cur.sunshine,
@@ -626,8 +807,10 @@ function makeFeature(cur,map){
     cur.humidity-l180.humidity,
     cur.wind-l30.wind,
     cur.wind-l60.wind,
-    Math.sin(ha),Math.cos(ha),Math.sin(da),Math.cos(da)
+    Math.sin(ha),Math.cos(ha),
+    seasonSin,seasonCos
   ];
+
   return x.every(Number.isFinite)?x:null;
 }
 
@@ -695,10 +878,12 @@ function getContributions(model,x){
 
 function renderDataSummary(rows){
   const first=rows[0],last=rows[rows.length-1];
+
   $("rowsKpi").textContent=rows.length.toLocaleString();
   $("daysKpi").textContent=countDays(rows)+"日";
   $("periodKpi").textContent=formatDateTime(first.ts)+" ～ "+formatDateTime(last.ts);
-  $("latestKpi").textContent=formatDateTime(last.ts);
+  $("latestKpi").textContent=
+    `${formatDateTime(last.ts)}\n（元表 ${last.date} ${last.time}）`;
   $("latestTempKpi").textContent=last.temperature.toFixed(1)+" ℃";
   $("stationKpi").textContent=[...new Set(rows.map(r=>r.station))].join(", ");
 }
@@ -730,40 +915,62 @@ function renderMetrics(){
 function renderForecastCards(){
   const grid=$("forecastGrid");
   grid.innerHTML="";
-  const latest=globalRows[globalRows.length-1];
+
   for(const h of HORIZONS){
     const r=modelResults.get(h.steps);
     const card=document.createElement("div");
     card.className="forecast-card";
+
     if(!r?.ok){
-      card.innerHTML=`<div class="h">${h.label}後</div><div class="temp">-</div><div class="sub">${escapeHtml(r?.error||"不可")}</div>`;
+      card.innerHTML=
+        `<div class="h">${h.label}後</div>`+
+        `<div class="temp">予測不可</div>`+
+        `<div class="sub badText">${escapeHtml(r?.error||"不可")}</div>`;
     }else{
-      const target=latest.ts+h.minutes*60000;
+      const target=r.latestTs+h.minutes*60000;
       const cls=r.modelMae<r.baseMae?"goodText":"badText";
+
       card.innerHTML=
         `<div class="h">${h.label}後 / ${formatShort(target)}</div>`+
         `<div class="temp">${r.forecast.toFixed(1)} ℃</div>`+
+        `<div class="sub">起点 ${formatShort(r.latestTs)} / ${r.latestTemp.toFixed(1)}℃</div>`+
         `<div class="sub ${cls}">AI MAE ${r.modelMae.toFixed(2)}℃ / 単純 ${r.baseMae.toFixed(2)}℃</div>`;
     }
+
     grid.appendChild(card);
   }
 }
 
 function drawForecastChart(){
-  const latest=globalRows[globalRows.length-1];
-  const points=[{x:latest.ts,y:latest.temperature,kind:"current"}];
-  const base=[{x:latest.ts,y:latest.temperature}];
-  for(const h of HORIZONS){
-    const r=modelResults.get(h.steps);
-    if(r?.ok){
-      points.push({x:latest.ts+h.minutes*60000,y:r.forecast});
-      base.push({x:latest.ts+h.minutes*60000,y:latest.temperature});
-    }
+  const okResults=HORIZONS
+    .map(h=>({h,r:modelResults.get(h.steps)}))
+    .filter(x=>x.r?.ok);
+
+  if(!okResults.length){
+    clearCanvas($("forecastChart"));
+    return;
   }
+
+  const originTs=okResults[0].r.latestTs;
+  const originTemp=okResults[0].r.latestTemp;
+
+  if(!okResults.every(x=>x.r.latestTs===originTs)){
+    clearCanvas($("forecastChart"));
+    return;
+  }
+
+  const points=[{x:originTs,y:originTemp}];
+  const base=[{x:originTs,y:originTemp}];
+
+  for(const {h,r} of okResults){
+    points.push({x:r.latestTs+h.minutes*60000,y:r.forecast});
+    base.push({x:r.latestTs+h.minutes*60000,y:r.latestTemp});
+  }
+
   drawTimeChart($("forecastChart"),[
     {label:"AI予測",points,color:"#6ea8fe",width:3},
     {label:"単純",points:base,color:"#9ca8ba",width:2,dash:[7,5]}
-  ],{current:{x:latest.ts,y:latest.temperature}});
+  ],{current:{x:originTs,y:originTemp}});
 }
 
 function renderSelectedBacktest(){
@@ -803,6 +1010,7 @@ function renderExplanation(){
     `学習データの平均気温 <code>${base.toFixed(2)}℃</code>`+
     ` ＋ 入力要素の合計寄与 <code>${sum>=0?"+":""}${sum.toFixed(2)}℃</code>`+
     ` ＝ <code>${r.forecast.toFixed(2)}℃</code><br>`+
+    `<span class="small">予測起点：${formatDateTime(r.latestTs)} / ${r.latestTemp.toFixed(1)}℃</span><br>`+
     `<span class="small">各寄与は「今の値が、このモデルの学習平均からどれだけ離れているか × 学習係数」で算出。</span>`;
 
   $("contribBody").innerHTML=r.contributions.map(c=>
@@ -845,6 +1053,181 @@ function drawTimeChart(canvas,series,extra={}){
 }
 
 function clearCanvas(c){c.getContext("2d").clearRect(0,0,c.width,c.height)}
+
+function inspectTsvSource(fileName,text){
+  const lines=normalizeNewlines(text).split("\n").filter(x=>x.trim()!=="");
+
+  if(lines.length<2){
+    return {
+      file:fileName,
+      filenameDate:extractDateFromFilename(fileName),
+      internalDates:[],
+      rowCount:0,
+      firstTs:NaN,
+      lastTs:NaN,
+      mismatch:true
+    };
+  }
+
+  const header=lines[0].replace(/^\uFEFF/,"").split("\t");
+  const dateIndex=header.indexOf("date");
+  const timeIndex=header.indexOf("time");
+
+  const internalDates=[];
+  const timestamps=[];
+
+  if(dateIndex>=0 && timeIndex>=0){
+    for(const line of lines.slice(1)){
+      const v=line.split("\t");
+      const d=v[dateIndex]??"";
+      const t=v[timeIndex]??"";
+
+      if(d && !internalDates.includes(d)) internalDates.push(d);
+
+      const ts=parseDateTime(d,t);
+      if(Number.isFinite(ts)) timestamps.push(ts);
+    }
+  }
+
+  timestamps.sort((a,b)=>a-b);
+
+  const filenameDate=extractDateFromFilename(fileName);
+  const mismatch=
+    !!filenameDate &&
+    (internalDates.length!==1 || internalDates[0]!==filenameDate);
+
+  return {
+    file:fileName,
+    filenameDate,
+    internalDates,
+    rowCount:Math.max(0,lines.length-1),
+    firstTs:timestamps[0]??NaN,
+    lastTs:timestamps.at(-1)??NaN,
+    mismatch
+  };
+}
+
+function extractDateFromFilename(name){
+  const m=String(name).match(/^(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : null;
+}
+
+function renderDiagnostics(rows,duplicateCount,preferFilenameDate){
+  const body=$("diagnosticBody");
+  body.innerHTML="";
+
+  let mismatchCount=0;
+
+  for(const d of sourceDiagnostics){
+    if(d.mismatch) mismatchCount++;
+
+    const internal=d.internalDates?.length
+      ? d.internalDates.join(", ")
+      : "-";
+
+    const first=Number.isFinite(d.firstTs) ? formatDateTime(d.firstTs) : "-";
+    const last=Number.isFinite(d.lastTs) ? formatDateTime(d.lastTs) : "-";
+
+    let verdict="OK";
+    let cls="goodText";
+
+    if(d.mismatch){
+      verdict=preferFilenameDate ? "日付不一致 → ファイル名で補正" : "日付不一致";
+      cls=preferFilenameDate ? "warnText" : "badText";
+    }
+
+    if(d.isCurrent){
+      verdict="今日の入力";
+      cls="";
+    }
+
+    const tr=document.createElement("tr");
+    tr.innerHTML=
+      `<td>${escapeHtml(d.file)}</td>`+
+      `<td>${escapeHtml(d.filenameDate||"-")}</td>`+
+      `<td>${escapeHtml(internal)}</td>`+
+      `<td>${d.rowCount ?? "-"}</td>`+
+      `<td>${first}</td>`+
+      `<td>${last}</td>`+
+      `<td class="${cls}">${verdict}</td>`;
+
+    body.appendChild(tr);
+  }
+
+  const gaps=findTimeGaps(rows);
+  const maxContinuous=maxContinuousMinutes(rows);
+
+  $("diagnosticSummary").textContent =
+    `日付不一致ファイル：${mismatchCount}個\n`+
+    `重複除去：${duplicateCount}行\n`+
+    `10分を超える時系列ギャップ：${gaps.length}箇所\n`+
+    `最大連続時間：約${(maxContinuous/60).toFixed(1)}時間\n`+
+    `ファイル名日付補正：${preferFilenameDate ? "ON" : "OFF"}`;
+}
+
+function findTimeGaps(rows){
+  const gaps=[];
+  const groups=groupByStation(rows);
+
+  for(const [station,list] of groups){
+    const s=[...list].sort((a,b)=>a.ts-b.ts);
+
+    for(let i=1;i<s.length;i++){
+      const diff=(s[i].ts-s[i-1].ts)/60000;
+
+      if(diff>10.01){
+        gaps.push({
+          station,
+          from:s[i-1].ts,
+          to:s[i].ts,
+          minutes:diff
+        });
+      }
+    }
+  }
+
+  return gaps;
+}
+
+function maxContinuousMinutes(rows){
+  let best=0;
+  const groups=groupByStation(rows);
+
+  for(const list of groups.values()){
+    const s=[...list].sort((a,b)=>a.ts-b.ts);
+    if(!s.length) continue;
+
+    let start=s[0].ts;
+    let prev=s[0].ts;
+
+    for(let i=1;i<s.length;i++){
+      if(s[i].ts-prev>10.01*60000){
+        best=Math.max(best,(prev-start)/60000+10);
+        start=s[i].ts;
+      }
+      prev=s[i].ts;
+    }
+
+    best=Math.max(best,(prev-start)/60000+10);
+  }
+
+  return best;
+}
+
+function getMissingFeatureLabels(cur,map){
+  const checks=[
+    [10,"10分前"],
+    [30,"30分前"],
+    [60,"1時間前"],
+    [180,"3時間前"],
+    [1440,"24時間前"]
+  ];
+
+  return checks
+    .filter(([m])=>!map.get(cur.ts-m*60*1000))
+    .map(([,label])=>label);
+}
+
 function groupByStation(rows){const m=new Map();for(const r of rows){if(!m.has(r.station))m.set(r.station,[]);m.get(r.station).push(r)}return m}
 function deduplicateRows(rows){const m=new Map();for(const r of rows)m.set(r.station+"|"+r.ts,r);return [...m.values()]}
 function countDays(rows){return new Set(rows.map(r=>r.station+"|"+r.date)).size}
@@ -868,8 +1251,3 @@ function download(name,text,type){const blob=new Blob(["\uFEFF",text],{type}),ur
 </script>
 </body>
 </html>
-
-
-</body>
-</html>
-
