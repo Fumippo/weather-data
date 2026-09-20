@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Weather Forecast Lab v8</title>
+<title>Weather Forecast Lab v8.2</title>
 <style>
 :root{
   --bg:#0b1020;
@@ -138,10 +138,10 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
 <div class="wrap">
   <div class="hero">
     <div>
-      <h1>Weather Forecast Lab <span style="font-size:.38em;color:var(--muted)">v8</span></h1>
+      <h1>Weather Forecast Lab <span style="font-size:.38em;color:var(--muted)">v8.2</span></h1>
       <p>10分値を主軸に、1時間補助観測を時間リークなしで結合し、ΔTモデルを比較検証するブラウザ完結型ダッシュボード</p>
     </div>
-    <div class="badge">v8 / 時間意味論 + 1時間補助観測 + A/B実験 + 144モデル</div>
+    <div class="badge">v8.2 / 雲量特殊記号 + 微量降水 + availability + A/B実験</div>
   </div>
 
   <div class="grid">
@@ -174,19 +174,20 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
 
       <div class="row" style="margin-top:8px">
         <div>
-          <label>1時間値 available 遅延（分）</label>
+          <label>未確認1時間値に適用する available 遅延（分）</label>
           <input id="hourlyAvailabilityLag" type="number" min="0" step="1" value="0">
         </div>
         <div>
-          <label>availability方針</label>
+          <label>今日入力のavailability確認状態</label>
           <select id="hourlyAvailabilityVerified">
-            <option value="0" selected>未確認（入力値を仮定として使用）</option>
-            <option value="1">確認済み</option>
+            <option value="0" selected>未確認（上のlagを解析時に適用）</option>
+            <option value="1">確認済み（保存時刻を固定使用）</option>
           </select>
         </div>
       </div>
       <div class="small">
-        0分はv7互換の仮定です。実際の公開遅延が分かったら変更してください。
+        0分はv7互換の仮定です。<b>未確認の過去TSVも、保存済みlagではなく現在のこの設定を解析時に再適用</b>します。
+        確認済みデータだけ保存済み <code>available_at</code> を固定使用します。
         <code>fetched_at</code> は取得来歴であり、<code>available_at</code> の代用にはしません。
       </div>
 
@@ -323,7 +324,7 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
       <div class="chart-wrap"><canvas id="forecastChart" width="1250" height="390"></canvas></div>
       <div class="legend">
         <span><i class="dot" style="background:#6ea8fe"></i>AI予測（ΔT補正）</span>
-        <span><i class="dot" style="background:#9ca8ba"></i>単純予報</span>
+        <span><i class="dot" style="background:#9ca8ba"></i>基準予報</span>
         <span><i class="dot" style="background:#f7c65d"></i>採用予報</span>
         <span><i class="dot" style="background:#2fc47e"></i>現在実測</span>
       </div>
@@ -335,7 +336,7 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
           <thead>
             <tr>
               <th>予測時刻</th><th>予測先</th><th>AI</th><th>ΔT</th>
-              <th>単純</th><th>採用</th><th>方式</th><th>AI MAE</th><th>単純MAE</th>
+              <th>基準</th><th>採用</th><th>方式</th><th>AI MAE</th><th>基準MAE</th>
             </tr>
           </thead>
           <tbody id="denseForecastBody"></tbody>
@@ -350,7 +351,7 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
       <div class="legend">
         <span><i class="dot" style="background:#eef4ff"></i>実測</span>
         <span><i class="dot" style="background:#6ea8fe"></i>AI</span>
-        <span><i class="dot" style="background:#9ca8ba"></i>単純予報</span>
+        <span><i class="dot" style="background:#9ca8ba"></i>基準予報</span>
       </div>
     </section>
 
@@ -366,7 +367,7 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
         <table>
           <thead>
             <tr>
-              <th>予測先</th><th>検証日数</th><th>AI MAE</th><th>単純MAE</th>
+              <th>予測先</th><th>検証日数</th><th>AI MAE</th><th>基準MAE</th>
               <th>改善率</th><th>AI中央値誤差</th><th>AIバイアス</th><th>AI勝率</th>
             </tr>
           </thead>
@@ -393,11 +394,11 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
             <tr>
               <th>予報起点</th><th>対象時刻</th><th>起点気温</th>
               <th>実測</th><th>AI</th><th>AI誤差</th>
-              <th>単純誤差</th><th>勝者</th><th>学習数</th>
+              <th>基準誤差</th><th>基準方式</th><th>勝者</th><th>学習数</th>
             </tr>
           </thead>
           <tbody id="walkForwardDetailBody">
-            <tr><td colspan="9">未実行</td></tr>
+            <tr><td colspan="10">未実行</td></tr>
           </tbody>
         </table>
       </div>
@@ -407,14 +408,15 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
       <h2>1時間補助特徴量 A/B 実験</h2>
       <div class="small">
         本番144モデルは現行51特徴量のまま固定します。ここでは代表8 horizonだけで、
-        <b>B0=51特徴量 / B1=+日射 / B2=+雲量 / B3=+日射+雲量</b>を同一学習期間・同一テストで比較します。
-        補助特徴量の欠損補完平均・標準偏差は必ず学習側だけから計算します。<br>
+        <b>B0=51特徴量 / B1=+日射 / B2=+雲量（特殊表記フラグ含む） / B3=+日射+雲量</b>を同一条件で比較します。
+        補助特徴量の欠損補完平均・標準偏差は必ず各foldの学習側だけから計算します。<br>
         <b>注意：</b>この結果を見ながら特徴量を調整した期間は「開発データ」です。
-        v8仕様を固定した後に新しく追加される日を、触っていないprospective holdoutとして扱ってください。
+        v8.2仕様を固定した後に新しく追加される日を、触っていないprospective holdoutとして扱ってください。<br>
+        B1/B2には値だけでなくage・availabilityフラグも含むため、改善しても「物理量そのものが効いた」とは即断しません。
       </div>
       <div class="actions">
         <button id="runAuxAblation" class="primary">代表8時間 A/B実験</button>
-        <button id="runAuxWalkForward" class="ghost">00/06/12/18 walk-forward（B0 vs B3）</button>
+        <button id="runAuxWalkForward" class="ghost">00/06/12/18 walk-forward（B0～B3全部）</button>
       </div>
       <div id="auxExperimentStatus" class="status">未実行です。1時間補助データがなくてもB0再現確認はできます。</div>
 
@@ -431,28 +433,29 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
         </table>
       </div>
 
-      <h3>4起点walk-forward：B0 vs B3</h3>
+      <h3>4起点walk-forward：B0 / B1 / B2 / B3</h3>
       <div class="small">
-        各日 00:00 / 06:00 / 12:00 / 18:00 を独立起点として評価します。
-        「予測件数」だけでなく、日別平均でB3がB0に勝った日数も表示します。
+        各日 00:00 / 06:00 / 12:00 / 18:00 を独立起点として、4構成を同一ケースで評価します。
+        「固定holdoutではB3が勝ったのにwalk-forwardでは負けた」のような期間依存を見抜くための主診断です。
       </div>
       <div class="table-wrap" style="max-height:430px">
         <table>
           <thead>
             <tr>
-              <th>予測先</th><th>ケース数</th><th>日数</th><th>B0 MAE</th><th>B3 MAE</th>
-              <th>改善率</th><th>B3バイアス</th><th>B3勝率</th><th>日勝率</th>
+              <th>予測先</th><th>ケース数</th><th>日数</th>
+              <th>B0 MAE</th><th>B1 MAE</th><th>B2 MAE</th><th>B3 MAE</th>
+              <th>最良</th><th>B0比改善率</th><th>B1日勝率</th><th>B2日勝率</th><th>B3日勝率</th>
             </tr>
           </thead>
-          <tbody id="auxWalkForwardBody"><tr><td colspan="9">未実行</td></tr></tbody>
+          <tbody id="auxWalkForwardBody"><tr><td colspan="12">未実行</td></tr></tbody>
         </table>
       </div>
 
-      <h3>起点時刻別（B3 − B0）</h3>
+      <h3>起点時刻別（各構成 − B0）</h3>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>予測先</th><th>00時</th><th>06時</th><th>12時</th><th>18時</th></tr></thead>
-          <tbody id="auxOriginBody"><tr><td colspan="5">未実行</td></tr></tbody>
+          <thead><tr><th>予測先</th><th>構成</th><th>00時</th><th>06時</th><th>12時</th><th>18時</th></tr></thead>
+          <tbody id="auxOriginBody"><tr><td colspan="6">未実行</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -463,8 +466,8 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
         <table>
           <thead>
             <tr>
-              <th>予測先</th><th>AI予測</th><th>単純予報</th><th>採用予報</th>
-              <th>AI MAE</th><th>単純MAE</th><th>改善率</th>
+              <th>予測先</th><th>AI予測</th><th>基準予報</th><th>採用予報</th>
+              <th>AI MAE</th><th>基準MAE</th><th>改善率</th>
               <th>学習数</th><th>テスト数</th><th>採用方式</th>
             </tr>
           </thead>
@@ -511,11 +514,13 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
           予測対象期間が学習側へ食い込まないよう、予測時間ぶんの境界を空けています。<br><br>
           <b>日別walk-forward：</b>別ボタンで実行します。各日00:00時点までに判明している情報だけで再学習し、
           その日の未来を予測します。「1日＝1ケース」で集計するため、通常の10分刻みテストより独立性の高い補助評価になります。<br><br>
-          <b>実際の未来予測：</b>全利用可能データで再学習します。v8では本番144モデルの51特徴量経路をv7から変更しません。<br><br>
+          <b>実際の未来予測：</b>全利用可能データで再学習します。v8.2でも本番144モデルの51特徴量AI本体はv7互換です。ただし比較基準は現在値固定だけでなく前日同時刻も候補にし、学習側だけで選びます。<br><br>
           <b>1時間補助観測：</b>raw → normalized → features を分離し、各値の時間意味論と availability を管理します。
-          補助情報はまず代表8 horizonの実験モデルだけへ投入し、本番へ自動昇格させません。<br><br>
-          <b>採用予報：</b>各予測時間について、過去検証MAEが小さい方を暫定採用します。
-          AIが単純予報に負けていれば現在気温固定、勝っていればAI予報を採用します。
+          補助情報はまず代表8 horizonの実験モデルだけへ投入し、本番へ自動昇格させません。<br>
+        <b>v8.2特殊表記：</b>雲量 <code>0+</code> は代表値0.5、<code>10-</code> は代表値9.5としてモデルへ渡しますが、raw記号と特殊表記フラグを残します。
+        降水量 <code>0.0</code> は累積量を水増しせず0mmのまま、降水現象フラグだけ1として扱います。<br><br>
+          <b>採用予報：</b>各予測時間について、AIと基準予報の過去検証MAEを比較して暫定採用します。
+          基準予報は「現在値固定」と「前日同時刻」のどちらを使うかを学習側だけで決め、テストを見て都合よく切り替えません。
         </div>
       </section>
     </div>
@@ -530,7 +535,7 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
         風向は16方位を東西/南北ベクトルへ変換、最大瞬間風は突風増幅量と1時間/3時間最大値、
         日照は30分/1時間/3時間累積、気温・気圧・湿度・風速は複数時間差を使用します。<br><br>
         <b>本番特徴量数：</b><span id="featureCountText"></span><br><br>
-        <b>v8実験候補：</b>全天日射量（最新・age・3時間累積・availability）、
+        <b>v8.2実験候補：</b>全天日射量（最新・age・3時間累積・availability）、
         雲量（最新・age・availability）。露点・蒸気圧・視程・天気はnormalized層へ保存しますが、
         初期A/Bではまだ投入しません。
       </div>
@@ -641,9 +646,9 @@ const FEATURE_NAMES = [
 ];
 
 
-const PARSER_VERSION = "8.0.0";
+const PARSER_VERSION = "8.2.0";
 
-// 1時間値のうち、v8初期A/Bで使う特徴群。
+// 1時間値のうち、v8.2 A/Bで使う特徴群。
 // raw/normalized層では露点・蒸気圧・視程・天気等も保持する。
 const AUX_VARIANTS = [
   {id:"B0",label:"B0 51特徴量",groups:[]},
@@ -662,7 +667,8 @@ const AUX_FEATURE_NAMES = {
   cloud:[
     "補助:最新雲量",
     "補助:雲量観測age分",
-    "補助:雲量利用可能フラグ"
+    "補助:雲量利用可能フラグ",
+    "補助:雲量特殊表記フラグ"
   ]
 };
 
@@ -702,13 +708,15 @@ let stationContextCache = null;
 let latestFeatureCache = null;
 let walkForwardResults = new Map();
 
-// v8: 1時間補助観測は10分値とは別レイヤー
+// v8.2: 1時間補助観測は10分値とは別レイヤー
 let stagedHourlyFiles = [];
 let currentHourlyRows = [];
 let currentHourlyTsv = "";
 let globalHourlyRows = [];
 let hourlyDiagnostics = [];
 let hourlyContextCache = new Map();
+let hourlyDuplicateCount = 0;
+let hourlyDuplicateConflictCount = 0;
 let auxAblationResults = [];
 let auxWalkForwardResults = [];
 
@@ -737,6 +745,20 @@ $("hourlyRaw").addEventListener("input", () => {
   currentHourlyRows = [];
   currentHourlyTsv = "";
   $("hourlyConvertStatus").textContent = "1時間入力が変更されました。再変換が必要です。";
+});
+
+$("hourlyAvailabilityLag").addEventListener("input", () => {
+  auxAblationResults=[];
+  auxWalkForwardResults=[];
+  $("auxExperimentStatus").textContent=
+    "availability lagが変更されました。未確認の過去1時間TSVにもこのlagを解析時に再適用します。通常実行/A-B検証を再実行してください。";
+});
+
+$("hourlyAvailabilityVerified").addEventListener("change", () => {
+  currentHourlyRows=[];
+  currentHourlyTsv="";
+  $("hourlyConvertStatus").textContent=
+    "今日入力のavailability確認状態が変更されました。1時間値を再変換してください。";
 });
 
 $("historyFiles").addEventListener("change", e => {
@@ -1011,15 +1033,61 @@ function isoOrBlank(ms){
 
 function parseCloudNumeric(raw){
   const s=String(raw??"").trim();
-  if(!s) return {value:NaN,parseOk:0,code:""};
+
+  const base={
+    value:NaN,
+    parseOk:0,
+    code:s,
+    approximate:0,
+    lower:NaN,
+    upper:NaN
+  };
+
+  if(!s) return {...base,code:""};
+
+  // 通常の雲量 0～10
   if(/^(?:\d+(?:\.\d+)?)$/.test(s)){
     const n=Number(s);
     if(Number.isFinite(n) && n>=0 && n<=10){
-      return {value:n,parseOk:1,code:s};
+      return {
+        value:n,
+        parseOk:1,
+        code:s,
+        approximate:0,
+        lower:n,
+        upper:n
+      };
     }
   }
-  // "10-" 等を勝手に数値化しない。raw/codeは保持する。
-  return {value:NaN,parseOk:0,code:s};
+
+  // JMA特殊表記。
+  // 0+ : 雲はあるが雲量1未満 → モデル用代表値0.5
+  // 10-: 雲量10相当だが雲のない部分あり → モデル用代表値9.5
+  // 0.5 / 9.5 は公式観測値ではなく、区間の代表値。
+  if(s==="0+"){
+    return {
+      value:0.5,
+      parseOk:1,
+      code:s,
+      approximate:1,
+      lower:0,
+      upper:1
+    };
+  }
+
+  if(s==="10-"){
+    return {
+      value:9.5,
+      parseOk:1,
+      code:s,
+      approximate:1,
+      lower:9,
+      upper:10
+    };
+  }
+
+  // -- や未知の特殊表記はraw/codeを保持し、勝手に数値化しない。
+  return base;
 }
 
 function hourlyTimeFromHourToken(token){
@@ -1102,6 +1170,7 @@ function hourlyRawRecordToObject(date,station,r,ingestedAtIso){
 
   const lag=getHourlyAvailabilityLag();
   const cloud=parseCloudNumeric(r.cloudRaw);
+  const precipObs=parsePrecipObservation(r.precipRaw);
 
   const obj={
     date,
@@ -1113,9 +1182,10 @@ function hourlyRawRecordToObject(date,station,r,ingestedAtIso){
     // 状態量は名目観測時刻の状態
     stateValidAt:ts,
 
-    // 全天日射・日照・降水等は直前1時間の積算として保持
-    solarValidFrom:ts-60*60*1000,
-    solarValidTo:ts,
+    // 時間意味論はHOURLY_TEMPORAL_SCHEMAから生成。
+    // 保存列は既存v8 TSV互換のためsolar intervalを明示して残す。
+    solarValidFrom:temporalIntervalFor("solar",ts).from,
+    solarValidTo:temporalIntervalFor("solar",ts).to,
 
     availableAt:ts+lag*60*1000,
     availabilityLagMin:lag,
@@ -1127,8 +1197,11 @@ function hourlyRawRecordToObject(date,station,r,ingestedAtIso){
 
     pressureLocal:toNumber(r.pressureLocalRaw),
     pressure:toNumber(r.pressureRaw),
-    precip:toPrecipNumber(r.precipRaw),
+    precip:precipObs.amount,
     precipRaw:r.precipRaw,
+    precipOccurred:precipObs.occurred,
+    precipTrace:precipObs.trace,
+    precipCode:precipObs.code,
 
     temperature:toNumber(r.temperatureRaw),
     dewpoint:toNumber(r.dewpointRaw),
@@ -1154,6 +1227,9 @@ function hourlyRawRecordToObject(date,station,r,ingestedAtIso){
     cloudNumeric:cloud.value,
     cloudParseOk:cloud.parseOk,
     cloudCode:cloud.code,
+    cloudApproximate:cloud.approximate,
+    cloudLower:cloud.lower,
+    cloudUpper:cloud.upper,
 
     visibility:toNumber(r.visibilityRaw),
     visibilityRaw:r.visibilityRaw
@@ -1170,13 +1246,14 @@ function hourlyHeader(){
     "available_at_iso","availability_lag_min","availability_verified",
     "source","parser_version","ingested_at_iso",
     "pressure_local_hpa","pressure_sea_hpa",
-    "precip_mm","precip_raw",
+    "precip_mm","precip_raw","precip_occurred","precip_trace","precip_code",
     "temperature_c","dewpoint_c","vapor_pressure_hpa","humidity_pct",
     "wind_speed_ms","wind_direction",
     "sunshine_hour","sunshine_hour_raw",
     "solar_mj_m2","solar_raw",
     "snowfall_cm","snowfall_raw","snow_depth_cm","snow_depth_raw",
     "weather_raw","cloud_amount_raw","cloud_amount_numeric","cloud_parse_ok",
+    "cloud_code","cloud_approximate","cloud_lower","cloud_upper",
     "visibility_km","visibility_raw"
   ];
 }
@@ -1198,6 +1275,7 @@ function hourlyRowsToTsv(rows){
       r.source ?? "",r.parserVersion ?? "",isoOrBlank(r.ingestedAt),
       valueOrBlank(r.pressureLocal),valueOrBlank(r.pressure),
       valueOrBlank(r.precip),r.precipRaw ?? "",
+      r.precipOccurred ?? 0,r.precipTrace ?? 0,r.precipCode ?? "",
       valueOrBlank(r.temperature),valueOrBlank(r.dewpoint),
       valueOrBlank(r.vaporPressure),valueOrBlank(r.humidity),
       valueOrBlank(r.wind),r.windDirection ?? "",
@@ -1207,6 +1285,8 @@ function hourlyRowsToTsv(rows){
       valueOrBlank(r.snowDepth),r.snowDepthRaw ?? "",
       r.weatherRaw ?? "",r.cloudRaw ?? "",
       valueOrBlank(r.cloudNumeric),r.cloudParseOk ?? 0,
+      r.cloudCode ?? "",r.cloudApproximate ?? 0,
+      valueOrBlank(r.cloudLower),valueOrBlank(r.cloudUpper),
       valueOrBlank(r.visibility),r.visibilityRaw ?? ""
     ].join("\t"));
   }
@@ -1283,7 +1363,18 @@ function parseHourlyTsvRows(text,sourceName=""){
 
     const lag=toNumber(get(v,"availability_lag_min"));
     const savedAvailable=parseIsoMs(get(v,"available_at_iso"));
-    const cloudNumeric=toNumber(get(v,"cloud_amount_numeric"));
+
+    // v8.2ではrawを真実の出発点にする。
+    // 旧v8.0/v8.1 TSVで10-がnumeric欠損でも、raw="10-"から9.5へ再解釈できる。
+    const cloudRaw=get(v,"cloud_amount_raw");
+    const reparsedCloud=parseCloudNumeric(cloudRaw);
+    const savedCloudNumeric=toNumber(get(v,"cloud_amount_numeric"));
+    const cloudNumeric=reparsedCloud.parseOk
+      ? reparsedCloud.value
+      : savedCloudNumeric;
+
+    const precipRaw=get(v,"precip_raw") || get(v,"precip_mm");
+    const precipObs=parsePrecipObservation(precipRaw);
 
     const row={
       date,
@@ -1304,8 +1395,11 @@ function parseHourlyTsvRows(text,sourceName=""){
 
       pressureLocal:toNumber(get(v,"pressure_local_hpa")),
       pressure:toNumber(get(v,"pressure_sea_hpa")),
-      precip:toNumber(get(v,"precip_mm")),
-      precipRaw:get(v,"precip_raw"),
+      precip:precipObs.amount,
+      precipRaw,
+      precipOccurred:precipObs.occurred,
+      precipTrace:precipObs.trace,
+      precipCode:precipObs.code,
       temperature:toNumber(get(v,"temperature_c")),
       dewpoint:toNumber(get(v,"dewpoint_c")),
       vaporPressure:toNumber(get(v,"vapor_pressure_hpa")),
@@ -1321,9 +1415,19 @@ function parseHourlyTsvRows(text,sourceName=""){
       snowDepth:toNumber(get(v,"snow_depth_cm")),
       snowDepthRaw:get(v,"snow_depth_raw"),
       weatherRaw:get(v,"weather_raw"),
-      cloudRaw:get(v,"cloud_amount_raw"),
+      cloudRaw,
       cloudNumeric,
-      cloudParseOk:Number(get(v,"cloud_parse_ok"))===1?1:0,
+      cloudParseOk:reparsedCloud.parseOk || Number(get(v,"cloud_parse_ok"))===1 ? 1 : 0,
+      cloudCode:reparsedCloud.code || get(v,"cloud_code"),
+      cloudApproximate:reparsedCloud.parseOk
+        ? reparsedCloud.approximate
+        : (Number(get(v,"cloud_approximate"))===1?1:0),
+      cloudLower:reparsedCloud.parseOk
+        ? reparsedCloud.lower
+        : toNumber(get(v,"cloud_lower")),
+      cloudUpper:reparsedCloud.parseOk
+        ? reparsedCloud.upper
+        : toNumber(get(v,"cloud_upper")),
       visibility:toNumber(get(v,"visibility_km")),
       visibilityRaw:get(v,"visibility_raw")
     };
@@ -1334,13 +1438,41 @@ function parseHourlyTsvRows(text,sourceName=""){
   return out;
 }
 
-function deduplicateHourlyRows(rows){
+function hourlyConflictSignature(r){
+  return [
+    r.solarRaw ?? "",
+    r.cloudRaw ?? "",
+    r.weatherRaw ?? "",
+    r.visibilityRaw ?? "",
+    Number.isFinite(r.temperature)?r.temperature:"",
+    Number.isFinite(r.humidity)?r.humidity:""
+  ].join("|");
+}
+
+function deduplicateHourlyRowsWithStats(rows){
   const m=new Map();
+  let duplicateCount=0;
+  let conflictCount=0;
+
   for(const r of rows){
     const key=`${r.station}|${r.ts}`;
+    const prev=m.get(key);
+
+    if(prev){
+      duplicateCount++;
+      if(hourlyConflictSignature(prev)!==hourlyConflictSignature(r)) conflictCount++;
+    }
+
+    // 後から入れた行を優先。今日入力を過去TSVより後にappendしているため、
+    // 同一時刻なら今日入力が優先される。
     m.set(key,r);
   }
-  return [...m.values()];
+
+  return {rows:[...m.values()],duplicateCount,conflictCount};
+}
+
+function deduplicateHourlyRows(rows){
+  return deduplicateHourlyRowsWithStats(rows).rows;
 }
 
 function inspectHourlySource(fileName,text){
@@ -1387,73 +1519,198 @@ function percentile(values,p){
   return a[lo]+(a[hi]-a[lo])*(i-lo);
 }
 
-function findLatestEligibleHourly(station,originTs,predicate,validToField="ts"){
+function hasRawValue(v){
+  return String(v ?? "").trim()!=="";
+}
+
+function temporalIntervalFor(field,ts){
+  const spec=HOURLY_TEMPORAL_SCHEMA[field] || {kind:"instantaneous"};
+
+  if(spec.kind==="accumulated"){
+    const minutes=Number(spec.minutes||0);
+    return {from:ts-minutes*60000,to:ts};
+  }
+
+  return {from:ts,to:ts};
+}
+
+function getHourlyValidTo(r,field){
+  if(field==="solar" && Number.isFinite(r.solarValidTo)) return r.solarValidTo;
+  const ts=Number.isFinite(r.nominalAt) ? r.nominalAt : r.ts;
+  return temporalIntervalFor(field,ts).to;
+}
+
+function getHourlyValidFrom(r,field){
+  if(field==="solar" && Number.isFinite(r.solarValidFrom)) return r.solarValidFrom;
+  const ts=Number.isFinite(r.nominalAt) ? r.nominalAt : r.ts;
+  return temporalIntervalFor(field,ts).from;
+}
+
+// availability未確認の行は「保存時に焼き付いたlag」を固定使用しない。
+// 現在のUI policyを解析時に再適用する。確認済み行だけ保存済みavailable_atを固定使用。
+function effectiveAvailableAt(r){
+  if(r.availabilityVerified===1 && Number.isFinite(r.availableAt)) return r.availableAt;
+  const base=Number.isFinite(r.nominalAt) ? r.nominalAt : r.ts;
+  return base+getHourlyAvailabilityLag()*60000;
+}
+
+function newHourlyJoinAudit(){
+  return {
+    validToReject:0,
+    availabilityReject:0,
+    solarStaleReject:0,
+    cloudStaleReject:0,
+    solarUnparseableLatest:0,
+    cloudUnparseableLatest:0,
+    solar3hComplete:0,
+    solar3hIncomplete:0
+  };
+}
+
+// 「最新の数値化可能値」ではなく「最新の観測」を選ぶ。
+// 最新観測が 10- 等で数値化不能なら、古いnumeric値へ遡って復活させない。
+// ただし最新観測がまだavailability gateを通らない場合は、ひとつ前の利用可能観測へ戻れる。
+function findLatestHourlyObservation(station,originTs,field,rawField,audit=null){
   const rows=hourlyContextCache.get(station)||[];
 
   for(let i=rows.length-1;i>=0;i--){
     const r=rows[i];
     if(r.ts>originTs) continue;
+    if(rawField && !hasRawValue(r[rawField])) continue;
 
-    const validTo=Number.isFinite(r[validToField]) ? r[validToField] : r.ts;
-    if(validTo>originTs) continue;
-    if(!Number.isFinite(r.availableAt) || r.availableAt>originTs) continue;
-    if(predicate(r)) return r;
+    const validTo=getHourlyValidTo(r,field);
+    if(validTo>originTs){
+      if(audit) audit.validToReject++;
+      continue;
+    }
+
+    const availableAt=effectiveAvailableAt(r);
+    if(!Number.isFinite(availableAt) || availableAt>originTs){
+      if(audit) audit.availabilityReject++;
+      continue;
+    }
+
+    return r;
   }
 
   return null;
 }
 
-function buildAuxFeatureAt(station,originTs,variantId){
+function buildAuxFeatureAt(station,originTs,variantId,audit=null){
   const v=AUX_VARIANTS.find(x=>x.id===variantId) || AUX_VARIANTS[0];
   const x=[];
   const names=[];
+  const meta={
+    solarUsable:false,
+    cloudUsable:false,
+    solarAge:NaN,
+    cloudAge:NaN,
+    solar3hComplete:false,
+    solar3hCoverage:0
+  };
 
   if(v.groups.includes("solar")){
-    const latest=findLatestEligibleHourly(
-      station,originTs,
-      r=>Number.isFinite(r.solar),
-      "solarValidTo"
+    const latestObs=findLatestHourlyObservation(
+      station,originTs,"solar","solarRaw",audit
     );
+
+    let freshLatest=null;
+    let rawSolarAge=NaN;
+
+    if(latestObs){
+      const validTo=getHourlyValidTo(latestObs,"solar");
+      rawSolarAge=(originTs-validTo)/60000;
+
+      if(!Number.isFinite(latestObs.solar)){
+        if(audit) audit.solarUnparseableLatest++;
+      }else if(rawSolarAge<=SOLAR_MAX_AGE_MIN){
+        freshLatest=latestObs;
+      }else{
+        if(audit) audit.solarStaleReject++;
+      }
+    }
 
     const rows=hourlyContextCache.get(station)||[];
-    const solar3hRows=rows.filter(r=>
-      Number.isFinite(r.solar) &&
-      Number.isFinite(r.solarValidTo) &&
-      r.solarValidTo<=originTs &&
-      r.solarValidTo>originTs-180*60000 &&
-      Number.isFinite(r.availableAt) &&
-      r.availableAt<=originTs
-    );
+    const numericRows=[];
 
-    const rawSolarAge=latest ? (originTs-latest.solarValidTo)/60000 : NaN;
-    const freshLatest=latest && rawSolarAge<=SOLAR_MAX_AGE_MIN ? latest : null;
+    for(const r of rows){
+      if(!hasRawValue(r.solarRaw)) continue;
+
+      const validTo=getHourlyValidTo(r,"solar");
+      if(validTo>originTs || validTo<=originTs-180*60000) continue;
+
+      const availableAt=effectiveAvailableAt(r);
+      if(!Number.isFinite(availableAt) || availableAt>originTs) continue;
+
+      if(Number.isFinite(r.solar)) numericRows.push(r);
+    }
+
+    numericRows.sort((a,b)=>getHourlyValidTo(a,"solar")-getHourlyValidTo(b,"solar"));
+
+    let complete3h=false;
+    if(numericRows.length===3){
+      const t=numericRows.map(r=>getHourlyValidTo(r,"solar"));
+      complete3h=
+        Math.abs((t[1]-t[0])-3600000)<60000 &&
+        Math.abs((t[2]-t[1])-3600000)<60000;
+    }
+
     const solarLatest=freshLatest?.solar;
     const solarAge=freshLatest ? rawSolarAge : NaN;
-    const solar3h=solar3hRows.length ? solar3hRows.reduce((s,r)=>s+r.solar,0) : NaN;
+    const solar3h=complete3h ? numericRows.reduce((sum,r)=>sum+r.solar,0) : NaN;
     const solarAvailable=freshLatest?1:0;
+
+    meta.solarUsable=!!freshLatest;
+    meta.solarAge=solarAge;
+    meta.solar3hComplete=complete3h;
+    meta.solar3hCoverage=Math.min(3,numericRows.length)/3;
+
+    if(audit){
+      if(complete3h) audit.solar3hComplete++;
+      else audit.solar3hIncomplete++;
+    }
 
     x.push(solarLatest,solarAge,solar3h,solarAvailable);
     names.push(...AUX_FEATURE_NAMES.solar);
   }
 
   if(v.groups.includes("cloud")){
-    const latest=findLatestEligibleHourly(
-      station,originTs,
-      r=>Number.isFinite(r.cloudNumeric),
-      "stateValidAt"
+    const latestObs=findLatestHourlyObservation(
+      station,originTs,"cloudRaw","cloudRaw",audit
     );
 
-    const rawCloudAge=latest ? (originTs-latest.stateValidAt)/60000 : NaN;
-    const freshLatest=latest && rawCloudAge<=CLOUD_MAX_AGE_MIN ? latest : null;
+    let freshLatest=null;
+    let rawCloudAge=NaN;
+
+    if(latestObs){
+      const validTo=getHourlyValidTo(latestObs,"cloudRaw");
+      rawCloudAge=(originTs-validTo)/60000;
+
+      // ここはv8.2でも維持する重要ルール。
+      // 最新観測が 10- 等で数値化不能なら missing とし、過去の数値へ遡らない。
+      if(!Number.isFinite(latestObs.cloudNumeric)){
+        if(audit) audit.cloudUnparseableLatest++;
+      }else if(rawCloudAge<=CLOUD_MAX_AGE_MIN){
+        freshLatest=latestObs;
+      }else{
+        if(audit) audit.cloudStaleReject++;
+      }
+    }
+
     const cloudLatest=freshLatest?.cloudNumeric;
     const cloudAge=freshLatest ? rawCloudAge : NaN;
     const cloudAvailable=freshLatest?1:0;
+    const cloudSpecial=freshLatest?.cloudApproximate===1 ? 1 : 0;
 
-    x.push(cloudLatest,cloudAge,cloudAvailable);
+    meta.cloudUsable=!!freshLatest;
+    meta.cloudAge=cloudAge;
+    meta.cloudSpecial=cloudSpecial;
+
+    x.push(cloudLatest,cloudAge,cloudAvailable,cloudSpecial);
     names.push(...AUX_FEATURE_NAMES.cloud);
   }
 
-  return {x,names};
+  return {x,names,meta};
 }
 
 function renderHourlyDiagnostics(){
@@ -1500,33 +1757,101 @@ function renderHourlyDiagnostics(){
 
   const solarCount=globalHourlyRows.filter(r=>Number.isFinite(r.solar)).length;
   const cloudCount=globalHourlyRows.filter(r=>Number.isFinite(r.cloudNumeric)).length;
-  const weatherCount=globalHourlyRows.filter(r=>String(r.weatherRaw||"").trim()).length;
+  const cloudRawCount=globalHourlyRows.filter(r=>hasRawValue(r.cloudRaw)).length;
+  const cloudSpecialCount=globalHourlyRows.filter(r=>r.cloudApproximate===1).length;
+  const weatherRows=globalHourlyRows.filter(r=>String(r.weatherRaw||"").trim());
+  const weatherCount=weatherRows.length;
   const visibilityCount=globalHourlyRows.filter(r=>Number.isFinite(r.visibility)).length;
   const uniqueDates=[...new Set(globalHourlyRows.map(r=>r.date))];
   const expected=uniqueDates.length*24;
   const verified=globalHourlyRows.filter(r=>r.availabilityVerified===1).length;
 
-  // 10分起点で実際に使われる雲量のage分布を確認
+  const audit=newHourlyJoinAudit();
+  const solarAges=[];
   const cloudAges=[];
+  let solarUsable=0;
+  let cloudUsable=0;
+  let solar3hComplete=0;
+
   for(const r of globalRows){
-    const c=findLatestEligibleHourly(r.station,r.ts,x=>Number.isFinite(x.cloudNumeric),"stateValidAt");
-    if(c) cloudAges.push((r.ts-c.stateValidAt)/60000);
+    const a=buildAuxFeatureAt(r.station,r.ts,"B3",audit);
+    if(a.meta.solarUsable){
+      solarUsable++;
+      solarAges.push(a.meta.solarAge);
+    }
+    if(a.meta.cloudUsable){
+      cloudUsable++;
+      cloudAges.push(a.meta.cloudAge);
+    }
+    if(a.meta.solar3hComplete) solar3hComplete++;
   }
 
-  const med=percentile(cloudAges,.5);
-  const p95=percentile(cloudAges,.95);
+  const solarMed=percentile(solarAges,.5);
+  const solarP95=percentile(solarAges,.95);
+  const cloudMed=percentile(cloudAges,.5);
+  const cloudP95=percentile(cloudAges,.95);
+
   const station10=[...new Set(globalRows.map(r=>r.station))];
   const station1=[...new Set(globalHourlyRows.map(r=>r.station))];
   const mismatch=station1.filter(s=>!station10.includes(s));
 
+  const weatherMap=new Map();
+  for(const r of weatherRows){
+    const k=String(r.weatherRaw).trim();
+    weatherMap.set(k,(weatherMap.get(k)||0)+1);
+  }
+  const weatherDist=[...weatherMap.entries()]
+    .sort((a,b)=>b[1]-a[1])
+    .map(([k,v])=>`${k}:${v}`)
+    .join(" / ") || "-";
+
+  let rainObs=0;
+  let rainTraceObs=0;
+  const rainDays=new Set();
+  let rainEvents=0;
+  for(const [station,stationRows0] of groupByStation(globalRows).entries()){
+    const rs=[...stationRows0].sort((a,b)=>a.ts-b.ts);
+    let prevRain=false;
+    let prevTs=NaN;
+
+    for(const r of rs){
+      const nowRain=(
+        r.precipOccurred===1 ||
+        (r.precipOccurred==null && Number.isFinite(r.precip) && r.precip>0)
+      );
+      if(nowRain){
+        rainObs++;
+        if(r.precipTrace===1) rainTraceObs++;
+        rainDays.add(makeOriginDateKey(r.ts));
+      }
+
+      const broken=!Number.isFinite(prevTs) || r.ts-prevTs>10*60000+1000;
+      if(nowRain && (!prevRain || broken)) rainEvents++;
+
+      prevRain=nowRain;
+      prevTs=r.ts;
+    }
+  }
+
+  const originCount=Math.max(1,globalRows.length);
+  const pct=n=>`${(n/originCount*100).toFixed(1)}%`;
+
   $("hourlyDiagnosticSummary").textContent=
     `1時間補助 ${globalHourlyRows.length.toLocaleString()}行 / ${uniqueDates.length}日 / 期待 ${expected.toLocaleString()}行\n`+
-    `日射 ${solarCount}件 / 雲量数値 ${cloudCount}件 / 天気 ${weatherCount}件 / 視程 ${visibilityCount}件\n`+
-    `availability確認済み ${verified}/${globalHourlyRows.length}行`+
-    `${verified<globalHourlyRows.length?"（未確認行は保存済みlagを仮定として使用）":""}\n`+
-    `雲量age 中央 ${Number.isFinite(med)?med.toFixed(0):"-"}分 / 95%点 ${Number.isFinite(p95)?p95.toFixed(0):"-"}分\n`+
-    `station不一致 ${mismatch.length}件 / 未来結合違反 0件（条件不成立データは結合対象外）\n`+
-    `安全結合: valid_to<=origin AND available_at<=origin`;
+    `重複除去 ${hourlyDuplicateCount}行 / 内容衝突 ${hourlyDuplicateConflictCount}件\n`+
+    `日射 ${solarCount}件 / 雲量raw ${cloudRawCount}件 / 雲量数値 ${cloudCount}件 / 天気 ${weatherCount}件 / 視程 ${visibilityCount}件\n`+
+    `実効利用率（10分起点） 日射 ${solarUsable}/${globalRows.length}=${pct(solarUsable)} / 雲量 ${cloudUsable}/${globalRows.length}=${pct(cloudUsable)} / 日射3h完全 ${solar3hComplete}/${globalRows.length}=${pct(solar3hComplete)}\n`+
+    `採用age 日射 中央 ${Number.isFinite(solarMed)?solarMed.toFixed(0):"-"}分 / 95% ${Number.isFinite(solarP95)?solarP95.toFixed(0):"-"}分`+
+    ` ・ 雲量 中央 ${Number.isFinite(cloudMed)?cloudMed.toFixed(0):"-"}分 / 95% ${Number.isFinite(cloudP95)?cloudP95.toFixed(0):"-"}分\n`+
+    `最新観測の数値化不能：日射 ${audit.solarUnparseableLatest}ケース / 雲量 ${audit.cloudUnparseableLatest}ケース`+
+    ` ・ stale拒否：日射 ${audit.solarStaleReject} / 雲量 ${audit.cloudStaleReject}\n`+
+    `結合ゲート拒否：valid_to ${audit.validToReject} / availability ${audit.availabilityReject}`+
+    `（「0固定表示」ではなく実際の選択処理を監査）\n`+
+    `availability確認済み ${verified}/${globalHourlyRows.length}行 / 未確認行は現在のpolicy lag ${getHourlyAvailabilityLag()}分を解析時に再適用\n`+
+    `station不一致 ${mismatch.length}件\n`+
+    `天気ラベル分布 ${weatherDist}\n`+
+    `10分降水：降水観測 ${rainObs}件 / 降水日 ${rainDays.size}日 / 降雨イベント ${rainEvents}回\n`+
+    `安全結合: valid_to<=origin AND effective_available_at<=origin`;
 }
 
 async function runAll(){
@@ -1546,8 +1871,8 @@ async function runAll(){
       auxAblationResults=[];
       auxWalkForwardResults=[];
       $("auxAblationBody").innerHTML='<tr><td colspan="8">未実行</td></tr>';
-      $("auxWalkForwardBody").innerHTML='<tr><td colspan="9">未実行</td></tr>';
-      $("auxOriginBody").innerHTML='<tr><td colspan="5">未実行</td></tr>';
+      $("auxWalkForwardBody").innerHTML='<tr><td colspan="12">未実行</td></tr>';
+      $("auxOriginBody").innerHTML='<tr><td colspan="6">未実行</td></tr>';
       $("auxExperimentStatus").textContent="未実行です。";
 
       const preferFilenameDate = $("preferFilenameDate").checked;
@@ -1634,14 +1959,17 @@ async function runAll(){
         });
       }
 
-      globalHourlyRows=deduplicateHourlyRows(hAll).sort((a,b)=>a.ts-b.ts);
+      const hourlyDedupe=deduplicateHourlyRowsWithStats(hAll);
+      hourlyDuplicateCount=hourlyDedupe.duplicateCount;
+      hourlyDuplicateConflictCount=hourlyDedupe.conflictCount;
+      globalHourlyRows=hourlyDedupe.rows.sort((a,b)=>a.ts-b.ts);
       prepareHourlyContext(globalHourlyRows);
 
       renderDiagnostics(globalRows,duplicateCount,preferFilenameDate);
       renderDataSummary(globalRows);
       renderHourlyDiagnostics();
 
-      // ---- 本番51特徴量：v7経路をそのまま維持 ----
+      // ---- 本番51特徴量：AI本体はv7互換。baseline評価はv8.2でも強化版 ----
       modelResults=new Map();
 
       for(let i=0;i<ALL_HORIZONS.length;i++){
@@ -1670,7 +1998,7 @@ async function runAll(){
         ` / 1時間補助 ${stagedHourlyFiles.length}過去TSV${currentHourlyIncluded ? " + 今日入力" : ""}\n`+
         `10分観測 ${globalRows.length.toLocaleString()}行 / ${countDays(globalRows)}日 / 重複除去 ${duplicateCount.toLocaleString()}行\n`+
         `1時間補助 ${globalHourlyRows.length.toLocaleString()}行 / ${countDays(globalHourlyRows)}日\n`+
-        `本番モデル 144本 / 本番特徴量 ${FEATURE_NAMES.length}個 / v7の51特徴量経路を変更なし\n`+
+        `本番モデル 144本 / 本番特徴量 ${FEATURE_NAMES.length}個 / 51特徴量のAI本体はv7互換 / 基準予報は強化版\n`+
         `10分availability 0分lag（v7互換・未確認） / 季節特徴 ${useSeasonFeatures ? "ON" : "OFF（90日未満）"}\n`+
         `通常計算時間 ${elapsed.toFixed(2)}秒`;
     }catch(e){
@@ -1725,6 +2053,7 @@ function rawRowToObject(date,station,r){
 
   const windSpeed=toNumber(r[6]);
   const gustSpeed=toNumber(r[8]);
+  const precipObs=parsePrecipObservation(r[3]);
 
   const obj={
     ts,date,time:r[0],station,
@@ -1738,7 +2067,10 @@ function rawRowToObject(date,station,r){
 
     pressureLocal:toNumber(r[1]),
     pressure:toNumber(r[2]),
-    precip:toPrecipNumber(r[3]),
+    precip:precipObs.amount,
+    precipOccurred:precipObs.occurred,
+    precipTrace:precipObs.trace,
+    precipCode:precipObs.code,
 
     temperature:toNumber(r[4]),
     humidity:toNumber(r[5]),
@@ -1801,6 +2133,9 @@ function parseTsvRows(text,overrideDate=null,sourceName=""){
     const time=v[idx.time]??"";
     const station=v[idx.station]??"";
 
+    const precipRaw=v[idx.precip_mm];
+    const precipObs=parsePrecipObservation(precipRaw);
+
     const row={
       ts:parseDateTime(date,time),
       date,
@@ -1818,7 +2153,10 @@ function parseTsvRows(text,overrideDate=null,sourceName=""){
 
       pressureLocal:toNumber(v[idx.pressure_local_hpa]),
       pressure:toNumber(v[idx.pressure_sea_hpa]),
-      precip:toPrecipNumber(v[idx.precip_mm]),
+      precip:precipObs.amount,
+      precipOccurred:precipObs.occurred,
+      precipTrace:precipObs.trace,
+      precipCode:precipObs.code,
 
       temperature:toNumber(v[idx.temperature_c]),
       humidity:toNumber(v[idx.humidity_pct]),
@@ -1845,6 +2183,37 @@ function parseTsvRows(text,overrideDate=null,sourceName=""){
   return out;
 }
 
+function selectBaselineMethodFromTrain(samples){
+  const common=samples.filter(s=>Number.isFinite(s.diurnalBaseline));
+
+  // 比較対象が少なすぎる間は従来の現在値固定を使う。
+  if(common.length<20) return "flat";
+
+  const flatMae=common.reduce((sum,s)=>sum+Math.abs(s.currentTemp-s.targetTemp),0)/common.length;
+  const diurnalMae=common.reduce((sum,s)=>sum+Math.abs(s.diurnalBaseline-s.targetTemp),0)/common.length;
+
+  return diurnalMae<flatMae ? "diurnal" : "flat";
+}
+
+function baselineLabel(method){
+  return method==="diurnal" ? "前日同時刻" : "現在値固定";
+}
+
+function baselineForSample(s,method){
+  if(method==="diurnal" && Number.isFinite(s.diurnalBaseline)) return s.diurnalBaseline;
+  return s.currentTemp;
+}
+
+function latestBaselineForecast(latest,steps,method){
+  if(method!=="diurnal") return latest.currentTemp;
+
+  const ctx=stationContextCache?.get(latest.station);
+  const prevTargetTs=latest.ts+steps*10*60000-24*60*60*1000;
+  const r=ctx?.map?.get(prevTargetTs);
+
+  return Number.isFinite(r?.temperature) ? r.temperature : latest.currentTemp;
+}
+
 function trainForHorizon(rows,steps){
   const samples=buildSamples(rows,steps);
 
@@ -1867,6 +2236,9 @@ function trainForHorizon(rows,steps){
     return {ok:false,samples,error:"検証サンプル不足"};
   }
 
+  // baseline方式はテストを見ず、学習側だけで決定。
+  const baselineMethod=selectBaselineMethodFromTrain(train);
+
   // 評価用ΔTモデル
   const evalModel=trainRidgeClosedForm(train,0.8);
 
@@ -1875,9 +2247,15 @@ function trainForHorizon(rows,steps){
   const pred=test.map((s,i)=>s.currentTemp+testDeltaPred[i]);
 
   const actual=test.map(s=>s.targetTemp);
-  const baseline=test.map(s=>s.currentTemp);
+  const flatBaseline=test.map(s=>s.currentTemp);
+  const diurnalBaseline=test.map(s=>
+    Number.isFinite(s.diurnalBaseline) ? s.diurnalBaseline : s.currentTemp
+  );
+  const baseline=test.map(s=>baselineForSample(s,baselineMethod));
 
   const modelMae=mae(actual,pred);
+  const flatMae=mae(actual,flatBaseline);
+  const diurnalMae=mae(actual,diurnalBaseline);
   const baseMae=mae(actual,baseline);
   const improvement=baseMae>0?(baseMae-modelMae)/baseMae*100:0;
 
@@ -1903,10 +2281,15 @@ function trainForHorizon(rows,steps){
 
   const contributions=getContributions(finalModel,latest.x);
 
-  // 過去検証でMAEが小さい方式を暫定採用
+  const baselineForecast=latestBaselineForecast(latest,steps,baselineMethod);
+
+  // 過去検証でMAEが小さい方式を暫定採用。
+  // baseline自体の方式はtrainだけで選んでいるため、テストを見て基準を都合よく切替えない。
   const useAI=modelMae<baseMae;
-  const adoptedForecast=useAI ? forecast : latest.currentTemp;
-  const adoptedMethod=useAI ? "AI（ΔT補正）" : "単純予報";
+  const adoptedForecast=useAI ? forecast : baselineForecast;
+  const adoptedMethod=useAI
+    ? "AI（ΔT補正）"
+    : `基準（${baselineLabel(baselineMethod)}）`;
 
   return {
     ok:true,
@@ -1917,11 +2300,14 @@ function trainForHorizon(rows,steps){
 
     modelMae,
     baseMae,
+    flatMae,
+    diurnalMae,
+    baselineMethod,
     improvement,
 
     forecast,
     forecastDelta,
-    baselineForecast:latest.currentTemp,
+    baselineForecast,
     adoptedForecast,
     adoptedMethod,
     useAI,
@@ -1934,6 +2320,8 @@ function trainForHorizon(rows,steps){
     testPred:pred,
     testDeltaPred,
     testBase:baseline,
+    testFlatBase:flatBaseline,
+    testDiurnalBase:diurnalBaseline,
     testTimes:test.map(s=>s.targetTs),
 
     model:finalModel,
@@ -2010,12 +2398,17 @@ function buildSamples(rows,steps){
       const targetTemp=target.temperature;
       const deltaTemp=targetTemp-cur.temperature;
 
+      const sameClockYesterday=map.get(target.ts-24*60*60*1000);
+
       out.push({
         x:f,
         y:deltaTemp,
         deltaTemp,
         targetTemp,
         currentTemp:cur.temperature,
+        diurnalBaseline:Number.isFinite(sameClockYesterday?.temperature)
+          ? sameClockYesterday.temperature
+          : NaN,
         station:cur.station,
         ts:cur.ts,
         targetTs:target.ts
@@ -2117,14 +2510,21 @@ function makeFeature(cur,map){
   const gustMax60=maxField(w60,"gust");
   const gustMax180=maxField(w180,"gust");
 
-  const rainNow=cur.precip>0 ? 1 : 0;
-  const rain30Ago=l30.precip>0 ? 1 : 0;
+  // v8.2: 0.0（0.5mm未満の微量降水）も「降水現象あり」として扱う。
+  // 一方、累積量は勝手に0.25mm等へ水増しせず、amount=0のまま。
+  const isRainOccurrence=r=>(
+    r?.precipOccurred===1 ||
+    (r?.precipOccurred==null && Number.isFinite(r?.precip) && r.precip>0)
+  );
 
-  // 直近30分内のどこかで「0 → 降水」になったか
-  const rainStarted30=hasStateTransition(w30,r=>r.precip>0,false,true) ? 1 : 0;
+  const rainNow=isRainOccurrence(cur) ? 1 : 0;
+  const rain30Ago=isRainOccurrence(l30) ? 1 : 0;
 
-  // 直近30分内のどこかで「降水 → 0」になったか
-  const rainStopped30=hasStateTransition(w30,r=>r.precip>0,true,false) ? 1 : 0;
+  // 直近30分内のどこかで「無降水 → 降水現象あり」になったか
+  const rainStarted30=hasStateTransition(w30,isRainOccurrence,false,true) ? 1 : 0;
+
+  // 直近30分内のどこかで「降水現象あり → 無降水」になったか
+  const rainStopped30=hasStateTransition(w30,isRainOccurrence,true,false) ? 1 : 0;
 
   const pressureGap=cur.pressure-cur.pressureLocal;
   const gustExcess=Math.max(0,cur.gust-cur.wind);
@@ -2526,6 +2926,16 @@ function makeOriginDateKey(ts){
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
 }
 
+function prefixSamplesThroughTarget(samples,cutoffTs){
+  let lo=0,hi=samples.length;
+  while(lo<hi){
+    const mid=(lo+hi)>>1;
+    if(samples[mid].targetTs<=cutoffTs) lo=mid+1;
+    else hi=mid;
+  }
+  return samples.slice(0,lo);
+}
+
 async function runAuxWalkForward(){
   if(!globalRows.length || !modelResults.size){
     $("auxExperimentStatus").textContent="先に通常の統合・学習を実行してください。";
@@ -2533,7 +2943,7 @@ async function runAuxWalkForward(){
   }
 
   if(!globalHourlyRows.length){
-    $("auxExperimentStatus").textContent="B3 walk-forwardには1時間補助データが必要です。";
+    $("auxExperimentStatus").textContent="補助特徴walk-forwardには1時間補助データが必要です。";
     return;
   }
 
@@ -2558,8 +2968,13 @@ async function runAuxWalkForward(){
         `4起点walk-forward中... ${h.label}後 (${hi+1}/${DISPLAY_HORIZONS.length})`;
       await nextFrame();
 
-      const samples0=buildSamples(globalRows,h.steps);
-      const samples3=buildExtendedSamples(globalRows,h.steps,"B3");
+      const variantSamples=new Map();
+
+      for(const v of AUX_VARIANTS){
+        const arr=buildExtendedSamples(globalRows,h.steps,v.id)
+          .sort((a,b)=>a.targetTs-b.targetTs);
+        variantSamples.set(v.id,arr);
+      }
 
       const origins=rows.filter(r=>{
         const d=new Date(r.ts);
@@ -2579,35 +2994,52 @@ async function runAuxWalkForward(){
         const target=map.get(origin.ts+h.minutes*60000);
         if(!target) continue;
 
-        const train0=samples0.filter(s=>s.targetTs<=origin.ts);
-        const train3=samples3.filter(s=>s.targetTs<=origin.ts);
-
-        if(train0.length<300 || train3.length<300) continue;
-
         const baseX=makeFeature(origin,map);
         if(!baseX) continue;
 
-        const aux=buildAuxFeatureAt(origin.station,origin.ts,"B3");
-        const x3=[...baseX,...aux.x];
+        const preds={};
+        const abs={};
+        const err={};
+        let trainCount=Infinity;
+        let failed=false;
 
-        const m0=trainRidgeClosedForm(train0,0.8);
-        const m3=trainRidgeClosedFormMissing(train3,0.8);
+        for(const v of AUX_VARIANTS){
+          const allSamples=variantSamples.get(v.id);
+          const train=prefixSamplesThroughTarget(allSamples,origin.ts);
 
-        const p0=origin.temperature+predictModel(m0,baseX);
-        const p3=origin.temperature+predictModelMissing(m3,x3);
-        const actual=target.temperature;
+          if(train.length<300){
+            failed=true;
+            break;
+          }
+
+          trainCount=Math.min(trainCount,train.length);
+
+          let pred;
+
+          if(v.id==="B0"){
+            const model=trainRidgeClosedForm(train,0.8);
+            pred=origin.temperature+predictModel(model,baseX);
+          }else{
+            const aux=buildAuxFeatureAt(origin.station,origin.ts,v.id);
+            const x=[...baseX,...aux.x];
+            const model=trainRidgeClosedFormMissing(train,0.8);
+            pred=origin.temperature+predictModelMissing(model,x);
+          }
+
+          preds[v.id]=pred;
+          err[v.id]=pred-target.temperature;
+          abs[v.id]=Math.abs(err[v.id]);
+        }
+
+        if(failed) continue;
 
         cases.push({
           originTs:origin.ts,
           originHour:new Date(origin.ts).getHours(),
           day:makeOriginDateKey(origin.ts),
           targetTs:target.ts,
-          actual,
-          p0,p3,
-          e0:p0-actual,
-          e3:p3-actual,
-          a0:Math.abs(p0-actual),
-          a3:Math.abs(p3-actual)
+          actual:target.temperature,
+          preds,err,abs,trainCount
         });
       }
 
@@ -2616,48 +3048,89 @@ async function runAuxWalkForward(){
         continue;
       }
 
-      const b0Mae=cases.reduce((s,c)=>s+c.a0,0)/cases.length;
-      const b3Mae=cases.reduce((s,c)=>s+c.a3,0)/cases.length;
-      const improvement=b0Mae>0?(b0Mae-b3Mae)/b0Mae*100:0;
-      const bias=cases.reduce((s,c)=>s+c.e3,0)/cases.length;
-      const winRate=cases.filter(c=>c.a3<c.a0).length/cases.length*100;
+      const stats={};
+      const b0ByDay=new Map();
 
-      const dayGroups=new Map();
       for(const c of cases){
-        if(!dayGroups.has(c.day)) dayGroups.set(c.day,[]);
-        dayGroups.get(c.day).push(c);
+        if(!b0ByDay.has(c.day)) b0ByDay.set(c.day,[]);
+        b0ByDay.get(c.day).push(c.abs.B0);
       }
 
-      let dayWins=0,dayTies=0;
+      for(const v of AUX_VARIANTS){
+        const maeV=cases.reduce((sum,c)=>sum+c.abs[v.id],0)/cases.length;
+        const biasV=cases.reduce((sum,c)=>sum+c.err[v.id],0)/cases.length;
 
-      for(const dc of dayGroups.values()){
-        const d0=dc.reduce((s,c)=>s+c.a0,0)/dc.length;
-        const d3=dc.reduce((s,c)=>s+c.a3,0)/dc.length;
-        if(d3<d0) dayWins++;
-        else if(Math.abs(d3-d0)<1e-12) dayTies++;
+        let caseWins=0,caseTies=0;
+        if(v.id!=="B0"){
+          for(const c of cases){
+            if(c.abs[v.id]<c.abs.B0) caseWins++;
+            else if(Math.abs(c.abs[v.id]-c.abs.B0)<1e-12) caseTies++;
+          }
+        }
+
+        const dayGroups=new Map();
+        for(const c of cases){
+          if(!dayGroups.has(c.day)) dayGroups.set(c.day,[]);
+          dayGroups.get(c.day).push(c);
+        }
+
+        let dayWins=0,dayTies=0;
+        if(v.id!=="B0"){
+          for(const dc of dayGroups.values()){
+            const d0=dc.reduce((sum,c)=>sum+c.abs.B0,0)/dc.length;
+            const dv=dc.reduce((sum,c)=>sum+c.abs[v.id],0)/dc.length;
+            if(dv<d0) dayWins++;
+            else if(Math.abs(dv-d0)<1e-12) dayTies++;
+          }
+        }
+
+        stats[v.id]={
+          mae:maeV,
+          bias:biasV,
+          winRate:v.id==="B0" ? NaN : (caseWins+.5*caseTies)/cases.length*100,
+          dayWinRate:v.id==="B0" ? NaN : (dayWins+.5*dayTies)/dayGroups.size*100
+        };
       }
 
-      const dayWinRate=(dayWins+.5*dayTies)/dayGroups.size*100;
+      const bestId=AUX_VARIANTS
+        .map(v=>v.id)
+        .reduce((best,id)=>stats[id].mae<stats[best].mae?id:best,"B0");
+
+      const improvement=stats.B0.mae>0
+        ? (stats.B0.mae-stats[bestId].mae)/stats.B0.mae*100
+        : 0;
 
       const byOrigin={};
-      for(const hour of [0,6,12,18]){
-        const a=cases.filter(c=>c.originHour===hour);
-        if(!a.length){
-          byOrigin[hour]=NaN;
-          continue;
+
+      for(const v of AUX_VARIANTS){
+        byOrigin[v.id]={};
+
+        for(const hour of [0,6,12,18]){
+          const a=cases.filter(c=>c.originHour===hour);
+
+          if(!a.length){
+            byOrigin[v.id][hour]=NaN;
+            continue;
+          }
+
+          const m0=a.reduce((sum,c)=>sum+c.abs.B0,0)/a.length;
+          const mv=a.reduce((sum,c)=>sum+c.abs[v.id],0)/a.length;
+          byOrigin[v.id][hour]=mv-m0;
         }
-        const m0=a.reduce((s,c)=>s+c.a0,0)/a.length;
-        const m3=a.reduce((s,c)=>s+c.a3,0)/a.length;
-        byOrigin[hour]=m3-m0; // 負ならB3改善
       }
+
+      const dayCount=new Set(cases.map(c=>c.day)).size;
 
       auxWalkForwardResults.push({
         horizon:h,
         ok:true,
         cases,
         caseCount:cases.length,
-        dayCount:dayGroups.size,
-        b0Mae,b3Mae,improvement,bias,winRate,dayWinRate,byOrigin
+        dayCount,
+        stats,
+        bestId,
+        improvement,
+        byOrigin
       });
     }
 
@@ -2665,9 +3138,9 @@ async function runAuxWalkForward(){
 
     const elapsed=(performance.now()-started)/1000;
     $("auxExperimentStatus").textContent=
-      `4起点walk-forward完了：B0 vs B3 / ${elapsed.toFixed(2)}秒\n`+
+      `4起点walk-forward完了：B0/B1/B2/B3 / ${elapsed.toFixed(2)}秒\n`+
       `起点 00/06/12/18時。各foldの補完平均・標準偏差は学習側だけで再計算。\n`+
-      `ケース勝率と「日別平均でB3が勝った日率」を分けて表示しています。`;
+      `各構成の日勝率と起点時刻別のB0差を表示しています。`;
   }catch(e){
     $("auxExperimentStatus").textContent="walk-forwardエラー\n"+e.message;
   }
@@ -2680,32 +3153,52 @@ function renderAuxWalkForward(){
   obody.innerHTML="";
 
   if(!auxWalkForwardResults.length){
-    body.innerHTML='<tr><td colspan="9">未実行</td></tr>';
-    obody.innerHTML='<tr><td colspan="5">未実行</td></tr>';
+    body.innerHTML='<tr><td colspan="12">未実行</td></tr>';
+    obody.innerHTML='<tr><td colspan="6">未実行</td></tr>';
     return;
   }
 
   for(const r of auxWalkForwardResults){
     const tr=document.createElement("tr");
-    const otr=document.createElement("tr");
 
     if(!r.ok){
-      tr.innerHTML=`<td>${r.horizon.label}</td><td colspan="8">${escapeHtml(r.error||"不可")}</td>`;
-      otr.innerHTML=`<td>${r.horizon.label}</td><td colspan="4">-</td>`;
-    }else{
-      tr.innerHTML=
-        `<td>${r.horizon.label}</td>`+
-        `<td>${r.caseCount}</td>`+
-        `<td>${r.dayCount}</td>`+
-        `<td>${r.b0Mae.toFixed(3)} ℃</td>`+
-        `<td>${r.b3Mae.toFixed(3)} ℃</td>`+
-        `<td class="${r.improvement>0?"goodText":"badText"}">${r.improvement.toFixed(1)} %</td>`+
-        `<td>${formatSigned(r.bias)} ℃</td>`+
-        `<td>${r.winRate.toFixed(1)} %</td>`+
-        `<td>${r.dayWinRate.toFixed(1)} %</td>`;
+      tr.innerHTML=`<td>${r.horizon.label}</td><td colspan="11">${escapeHtml(r.error||"不可")}</td>`;
+      body.appendChild(tr);
+
+      const otr=document.createElement("tr");
+      otr.innerHTML=`<td>${r.horizon.label}</td><td colspan="5">-</td>`;
+      obody.appendChild(otr);
+      continue;
+    }
+
+    const st=r.stats;
+    const best=AUX_VARIANTS.find(v=>v.id===r.bestId)?.label || r.bestId;
+
+    const dayWin=id=>
+      Number.isFinite(st[id]?.dayWinRate) ? `${st[id].dayWinRate.toFixed(1)} %` : "-";
+
+    tr.innerHTML=
+      `<td>${r.horizon.label}</td>`+
+      `<td>${r.caseCount}</td>`+
+      `<td>${r.dayCount}</td>`+
+      `<td>${st.B0.mae.toFixed(3)} ℃</td>`+
+      `<td>${st.B1.mae.toFixed(3)} ℃</td>`+
+      `<td>${st.B2.mae.toFixed(3)} ℃</td>`+
+      `<td>${st.B3.mae.toFixed(3)} ℃</td>`+
+      `<td><b>${escapeHtml(best)}</b></td>`+
+      `<td class="${r.improvement>0?"goodText":r.improvement<0?"badText":""}">${r.improvement.toFixed(1)} %</td>`+
+      `<td>${dayWin("B1")}</td>`+
+      `<td>${dayWin("B2")}</td>`+
+      `<td>${dayWin("B3")}</td>`;
+
+    body.appendChild(tr);
+
+    for(const id of ["B1","B2","B3"]){
+      const otr=document.createElement("tr");
+      const label=AUX_VARIANTS.find(v=>v.id===id)?.label || id;
 
       const cell=hour=>{
-        const v=r.byOrigin[hour];
+        const v=r.byOrigin[id]?.[hour];
         if(!Number.isFinite(v)) return "-";
         const cls=v<0?"goodText":v>0?"badText":"";
         return `<span class="${cls}">${formatSigned(v)} ℃</span>`;
@@ -2713,11 +3206,14 @@ function renderAuxWalkForward(){
 
       otr.innerHTML=
         `<td>${r.horizon.label}</td>`+
-        `<td>${cell(0)}</td><td>${cell(6)}</td><td>${cell(12)}</td><td>${cell(18)}</td>`;
-    }
+        `<td>${escapeHtml(label)}</td>`+
+        `<td>${cell(0)}</td>`+
+        `<td>${cell(6)}</td>`+
+        `<td>${cell(12)}</td>`+
+        `<td>${cell(18)}</td>`;
 
-    body.appendChild(tr);
-    obody.appendChild(otr);
+      obody.appendChild(otr);
+    }
   }
 }
 
@@ -2786,7 +3282,7 @@ function renderDenseForecastTable(){
         `<td>${h.label}</td>`+
         `<td>${r.forecast.toFixed(1)} ℃</td>`+
         `<td>${formatSigned(r.forecastDelta)} ℃</td>`+
-        `<td>${r.baselineForecast.toFixed(1)} ℃</td>`+
+        `<td>${r.baselineForecast.toFixed(1)} ℃ <span class="small">(${baselineLabel(r.baselineMethod)})</span></td>`+
         `<td><b>${r.adoptedForecast.toFixed(1)} ℃</b></td>`+
         `<td class="${r.useAI?"goodText":"warnText"}">${r.adoptedMethod}</td>`+
         `<td>${r.modelMae.toFixed(3)} ℃</td>`+
@@ -2867,8 +3363,15 @@ async function runWalkForward(){
         const model=trainRidgeClosedForm(train,0.8);
         const delta=predictModel(model,x);
         const ai=origin.temperature+delta;
-        const baseline=origin.temperature;
         const actual=target.temperature;
+
+        // baseline方式もfoldのtrainだけで決定する。
+        const baselineMethod=selectBaselineMethodFromTrain(train);
+        const prevTarget=map.get(target.ts-24*60*60*1000);
+        const diurnal=Number.isFinite(prevTarget?.temperature) ? prevTarget.temperature : NaN;
+        const baseline=baselineMethod==="diurnal" && Number.isFinite(diurnal)
+          ? diurnal
+          : origin.temperature;
 
         const aiError=ai-actual;
         const baseError=baseline-actual;
@@ -2880,6 +3383,7 @@ async function runWalkForward(){
           actual,
           ai,
           baseline,
+          baselineMethod,
           aiError,
           baseError,
           aiAbs:Math.abs(aiError),
@@ -2933,6 +3437,7 @@ async function runWalkForward(){
     $("walkForwardStatus").textContent=
       `完了：日別walk-forward ${commonOrigins.length}日分 × 代表8時間\n`+
       `各日00:00時点までの情報だけで再学習\n`+
+      `基準予報は各foldの学習期間だけで「現在値固定 / 前日同時刻」を選択\n`+
       `計算時間 ${elapsed.toFixed(2)}秒\n`+
       `※通常144本予報とは別計算。毎回自動では実行しません。`;
 
@@ -2984,14 +3489,14 @@ function renderWalkForwardDetail(){
   const r=walkForwardResults.get(steps);
 
   if(!r?.ok){
-    body.innerHTML='<tr><td colspan="9">walk-forward未実行、またはこの時間は検証できません。</td></tr>';
+    body.innerHTML='<tr><td colspan="10">walk-forward未実行、またはこの時間は検証できません。</td></tr>';
     return;
   }
 
   for(const c of r.cases){
     const winner=
       c.aiAbs<c.baseAbs ? "AI" :
-      c.aiAbs>c.baseAbs ? "単純" : "引分";
+      c.aiAbs>c.baseAbs ? "基準" : "引分";
 
     const tr=document.createElement("tr");
 
@@ -3003,7 +3508,8 @@ function renderWalkForwardDetail(){
       `<td>${c.ai.toFixed(2)} ℃</td>`+
       `<td>${c.aiError>=0?"+":""}${c.aiError.toFixed(2)} ℃</td>`+
       `<td>${c.baseError>=0?"+":""}${c.baseError.toFixed(2)} ℃</td>`+
-      `<td class="${winner==="AI"?"goodText":winner==="単純"?"warnText":""}"><b>${winner}</b></td>`+
+      `<td>${baselineLabel(c.baselineMethod)}</td>`+
+      `<td class="${winner==="AI"?"goodText":winner==="基準"?"warnText":""}"><b>${winner}</b></td>`+
       `<td>${c.trainCount}</td>`;
 
     body.appendChild(tr);
@@ -3026,7 +3532,7 @@ function renderMetrics(){
       tr.innerHTML=
         `<td>${h.label}</td>`+
         `<td>${r.forecast.toFixed(1)} ℃ <span class="small">(${formatSigned(r.forecastDelta)}℃)</span></td>`+
-        `<td>${r.baselineForecast.toFixed(1)} ℃</td>`+
+        `<td>${r.baselineForecast.toFixed(1)} ℃ <span class="small">(${baselineLabel(r.baselineMethod)})</span></td>`+
         `<td><b>${r.adoptedForecast.toFixed(1)} ℃</b></td>`+
         `<td>${r.modelMae.toFixed(3)} ℃</td>`+
         `<td>${r.baseMae.toFixed(3)} ℃</td>`+
@@ -3063,9 +3569,9 @@ function renderForecastCards(){
         `<div class="small ${methodClass}">採用：${r.adoptedMethod}</div>`+
         `<div class="temp">${r.adoptedForecast.toFixed(1)} ℃</div>`+
         `<div class="sub">AI ${r.forecast.toFixed(1)}℃（ΔT ${formatSigned(r.forecastDelta)}℃）</div>`+
-        `<div class="sub">単純 ${r.baselineForecast.toFixed(1)}℃</div>`+
+        `<div class="sub">基準 ${r.baselineForecast.toFixed(1)}℃（${baselineLabel(r.baselineMethod)}）</div>`+
         `<div class="sub">起点 ${formatShort(r.latestTs)} / ${r.latestTemp.toFixed(1)}℃</div>`+
-        `<div class="sub ${r.improvement>=0?"goodText":"badText"}">AI MAE ${r.modelMae.toFixed(2)}℃ / 単純 ${r.baseMae.toFixed(2)}℃</div>`;
+        `<div class="sub ${r.improvement>=0?"goodText":"badText"}">AI MAE ${r.modelMae.toFixed(2)}℃ / 基準 ${r.baseMae.toFixed(2)}℃</div>`;
     }
 
     grid.appendChild(card);
@@ -3103,7 +3609,7 @@ function drawForecastChart(){
 
   drawTimeChart($("forecastChart"),[
     {label:"AI予測",points:ai,color:"#6ea8fe",width:2.0,dash:[5,4]},
-    {label:"単純",points:base,color:"#9ca8ba",width:1.6,dash:[7,5]},
+    {label:"基準予報",points:base,color:"#9ca8ba",width:1.6,dash:[7,5]},
     {label:"採用予報",points:adopted,color:"#f7c65d",width:3.0}
   ],{current:{x:originTs,y:originTemp}});
 }
@@ -3123,10 +3629,10 @@ function renderSelectedBacktest(){
   drawTimeChart($("backtestChart"),[
     {label:"実測",points:mk(r.testActual),color:"#eef4ff",width:2.5},
     {label:"AI",points:mk(r.testPred),color:"#6ea8fe",width:2.2},
-    {label:"単純",points:mk(r.testBase),color:"#9ca8ba",width:1.8,dash:[5,5]}
+    {label:"基準",points:mk(r.testBase),color:"#9ca8ba",width:1.8,dash:[5,5]}
   ]);
   $("backtestTitle").textContent=
-    `${h.label}後：AI MAE ${r.modelMae.toFixed(3)}℃ / 単純 ${r.baseMae.toFixed(3)}℃ / `+
+    `${h.label}後：AI MAE ${r.modelMae.toFixed(3)}℃ / 基準 ${r.baseMae.toFixed(3)}℃（${baselineLabel(r.baselineMethod)}） / `+
     `暫定採用 ${r.adoptedMethod} / テスト ${r.testCount}件`;
 }
 
@@ -3153,8 +3659,9 @@ function renderExplanation(){
     ` ＋ 入力要素の補正 <code>${formatSigned(contributionSum)}℃</code>`+
     ` ＝ AI予測 <code>${reconstructedTemp.toFixed(2)}℃</code><br>`+
     `<b>AI予測ΔT：<code>${formatSigned(r.forecastDelta)}℃</code></b><br>`+
-    `単純予報 <code>${r.baselineForecast.toFixed(2)}℃</code> / `+
+    `基準予報 <code>${r.baselineForecast.toFixed(2)}℃（${baselineLabel(r.baselineMethod)}）</code> / `+
     `採用予報 <code>${r.adoptedForecast.toFixed(2)}℃（${r.adoptedMethod}）</code><br>`+
+    `<span class="small">基準候補の検証MAE：現在値固定 ${r.flatMae.toFixed(3)}℃ / 前日同時刻 ${r.diurnalMae.toFixed(3)}℃。基準方式は学習側だけで選択。</span><br>`+
     `<span class="small">予測起点：${formatDateTime(r.latestTs)} / ${r.latestTemp.toFixed(1)}℃</span><br>`+
     `<span class="small">寄与はすべて「未来気温そのもの」ではなく、現在気温からの補正量 ΔT に対する寄与です。</span>`;
 
@@ -3393,11 +3900,73 @@ function parseDateTime(date,time){
   return new Date(date+"T"+time+":00").getTime();
 }
 function toNumber(v){if(v==null||v===""||v==="--")return NaN;const n=Number(v);return Number.isFinite(n)?n:NaN}
+function parsePrecipObservation(v){
+  const s=String(v??"").trim();
+
+  // -- / 空欄 = 該当現象なし
+  if(!s || s==="--"){
+    return {
+      amount:0,
+      occurred:0,
+      trace:0,
+      code:s||"--",
+      lower:0,
+      upper:0
+    };
+  }
+
+  // JMAの降水量 0.0 = 降水現象はあるが0.5mm未満。
+  // 累積量を勝手に0.25mm等へ水増しせず amount=0 のまま保持し、
+  // rain-state判定は occurred=1 で拾う。
+  if(s==="0.0"){
+    return {
+      amount:0,
+      occurred:1,
+      trace:1,
+      code:s,
+      lower:0,
+      upper:0.5
+    };
+  }
+
+  // 汎用表記0も「現象あり・表示単位未満」として意味を保持。
+  // 降水列では通常0.0が使われるが、0が来ても現象なしには落とさない。
+  if(s==="0"){
+    return {
+      amount:0,
+      occurred:1,
+      trace:1,
+      code:s,
+      lower:0,
+      upper:1
+    };
+  }
+
+  const n=Number(s);
+  if(Number.isFinite(n)){
+    return {
+      amount:n,
+      occurred:n>0?1:0,
+      trace:0,
+      code:s,
+      lower:n,
+      upper:n
+    };
+  }
+
+  // 未知表記は量0としてモデルを壊さず、現象フラグも立てない。
+  return {
+    amount:0,
+    occurred:0,
+    trace:0,
+    code:s,
+    lower:NaN,
+    upper:NaN
+  };
+}
+
 function toPrecipNumber(v){
-  // この元表では "--" / 空欄を降水なしとして0mm扱い
-  if(v==null||v===""||v==="--") return 0;
-  const n=Number(v);
-  return Number.isFinite(n) ? n : 0;
+  return parsePrecipObservation(v).amount;
 }
 
 const WIND_DEGREES={
