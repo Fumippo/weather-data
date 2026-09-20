@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Weather Forecast Lab v3</title>
+<title>Weather Forecast Lab v5</title>
 <style>
 :root{
   --bg:#0b1020;
@@ -138,10 +138,10 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
 <div class="wrap">
   <div class="hero">
     <div>
-      <h1>Weather Forecast Lab <span style="font-size:.38em;color:var(--muted)">v3</span></h1>
+      <h1>Weather Forecast Lab <span style="font-size:.38em;color:var(--muted)">v5</span></h1>
       <p>10分値をTSV化し、現在気温からの変化量 ΔT を学習して多時間先を予測するブラウザ完結型ダッシュボード</p>
     </div>
-    <div class="badge">v3 / ΔT補正 + 自動モデル選択 / 外部ライブラリなし</div>
+    <div class="badge">v5 / 10分刻み144モデル + ΔT補正 + 自動モデル選択</div>
   </div>
 
   <div class="grid">
@@ -235,6 +235,7 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
 
     <section class="panel full">
       <h2>未来予測</h2>
+      <div class="small">グラフは10分後～24時間後まで、10分刻み144点をすべて実際に予測して描画します。補間ではありません。</div>
       <div id="forecastGrid" class="forecast-grid"></div>
       <div class="chart-wrap"><canvas id="forecastChart" width="1250" height="390"></canvas></div>
       <div class="legend">
@@ -242,6 +243,20 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
         <span><i class="dot" style="background:#9ca8ba"></i>単純予報</span>
         <span><i class="dot" style="background:#f7c65d"></i>採用予報</span>
         <span><i class="dot" style="background:#2fc47e"></i>現在実測</span>
+      </div>
+
+      <h3>10分刻み未来予測</h3>
+      <div class="small">10分後から24時間後まで、補間ではなく144個の独立モデルがそれぞれ直接予測します。</div>
+      <div class="table-wrap" style="margin-top:10px;max-height:430px">
+        <table>
+          <thead>
+            <tr>
+              <th>予測時刻</th><th>予測先</th><th>AI</th><th>ΔT</th>
+              <th>単純</th><th>採用</th><th>方式</th><th>AI MAE</th><th>単純MAE</th>
+            </tr>
+          </thead>
+          <tbody id="denseForecastBody"></tbody>
+        </table>
       </div>
     </section>
 
@@ -299,7 +314,7 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
         <div class="explain">
           <b>予測方式：</b>時間ごとの「気温変化量 ΔT」直接リッジ回帰。<br>
           未来気温そのものではなく、<b>未来気温 − 現在気温</b>を学習します。
-          10分後、30分後、1時間後、2時間後、3時間後、6時間後、12時間後、24時間後を別々に学習します。<br><br>
+          10分後から24時間後まで10分刻みで144個の別モデルを学習します。表の代表時間だけでなく、20分後・40分後・5時間10分後なども直接予測します。<br><br>
           <b>最終計算：</b>現在気温 ＋ AIが予測したΔT ＝ AI未来気温。<br>
           これにより短時間予報で学習平均へ無理に引っ張られる挙動を抑えます。<br><br>
           <b>主な入力：</b>現在の気温・湿度・海面気圧・風速・日照、
@@ -318,7 +333,7 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
 <script>
 const $ = id => document.getElementById(id);
 
-const HORIZONS = [
+const DISPLAY_HORIZONS = [
   {steps:1,label:"10分",minutes:10},
   {steps:3,label:"30分",minutes:30},
   {steps:6,label:"1時間",minutes:60},
@@ -328,6 +343,19 @@ const HORIZONS = [
   {steps:72,label:"12時間",minutes:720},
   {steps:144,label:"24時間",minutes:1440}
 ];
+
+// 10分後～24時間後まで、10分刻みで144個の独立モデルを作る。
+const ALL_HORIZONS = Array.from({length:144},(_,i)=>{
+  const steps=i+1;
+  const minutes=steps*10;
+  return {
+    steps,
+    minutes,
+    label:minutes<60 ? `${minutes}分` :
+      minutes%60===0 ? `${minutes/60}時間` :
+      `${Math.floor(minutes/60)}時間${minutes%60}分`
+  };
+});
 
 const FEATURE_NAMES = [
   "現在気温","現在湿度","海面気圧","風速","日照",
@@ -537,8 +565,8 @@ async function runAll(){
 
       modelResults=new Map();
 
-      for(const h of HORIZONS){
-        $("runStatus").textContent=`学習中... ${h.label}後モデル`;
+      for(const h of ALL_HORIZONS){
+        $("runStatus").textContent=`学習中... ${h.label}後モデル (${h.steps}/144)`;
         await nextFrame();
         const result=trainForHorizon(globalRows,h.steps);
         modelResults.set(h.steps,result);
@@ -547,13 +575,15 @@ async function runAll(){
       renderMetrics();
       renderForecastCards();
       drawForecastChart();
+      renderDenseForecastTable();
       renderSelectedBacktest();
       renderExplanation();
 
       $("runStatus").textContent =
         `完了：${stagedFiles.length}個の過去TSV${currentIncluded ? " + 今日の入力" : ""}を統合\n` +
         `観測 ${globalRows.length.toLocaleString()}行 / 収録 ${countDays(globalRows)}日\n` +
-        `重複除去 ${duplicateCount.toLocaleString()}行 / 季節特徴 ${useSeasonFeatures ? "ON" : "OFF（90日未満）"}`;
+        `重複除去 ${duplicateCount.toLocaleString()}行 / 季節特徴 ${useSeasonFeatures ? "ON" : "OFF（90日未満）"}\n` +
+        `未来予測モデル 144本（10分刻み・24時間先まで）`;
     }catch(e){
       $("runStatus").textContent="エラー\n"+e.message;
     }
@@ -936,11 +966,42 @@ function renderDataSummary(rows){
   $("stationKpi").textContent=[...new Set(rows.map(r=>r.station))].join(", ");
 }
 
+
+function renderDenseForecastTable(){
+  const body=$("denseForecastBody");
+  if(!body) return;
+  body.innerHTML="";
+
+  for(const h of ALL_HORIZONS){
+    const r=modelResults.get(h.steps);
+    const tr=document.createElement("tr");
+
+    if(!r?.ok){
+      tr.innerHTML=
+        `<td>-</td><td>${h.label}</td><td colspan="7">${escapeHtml(r?.error||"不可")}</td>`;
+    }else{
+      const target=r.latestTs+h.minutes*60000;
+      tr.innerHTML=
+        `<td>${formatShort(target)}</td>`+
+        `<td>${h.label}</td>`+
+        `<td>${r.forecast.toFixed(1)} ℃</td>`+
+        `<td>${formatSigned(r.forecastDelta)} ℃</td>`+
+        `<td>${r.baselineForecast.toFixed(1)} ℃</td>`+
+        `<td><b>${r.adoptedForecast.toFixed(1)} ℃</b></td>`+
+        `<td class="${r.useAI?"goodText":"warnText"}">${r.adoptedMethod}</td>`+
+        `<td>${r.modelMae.toFixed(3)} ℃</td>`+
+        `<td>${r.baseMae.toFixed(3)} ℃</td>`;
+    }
+
+    body.appendChild(tr);
+  }
+}
+
 function renderMetrics(){
   const body=$("metricsBody");
   body.innerHTML="";
 
-  for(const h of HORIZONS){
+  for(const h of DISPLAY_HORIZONS){
     const r=modelResults.get(h.steps);
     const tr=document.createElement("tr");
 
@@ -970,7 +1031,7 @@ function renderForecastCards(){
   const grid=$("forecastGrid");
   grid.innerHTML="";
 
-  for(const h of HORIZONS){
+  for(const h of DISPLAY_HORIZONS){
     const r=modelResults.get(h.steps);
     const card=document.createElement("div");
     card.className="forecast-card";
@@ -999,19 +1060,19 @@ function renderForecastCards(){
 }
 
 function drawForecastChart(){
-  const okResults=HORIZONS
+  const dense=ALL_HORIZONS
     .map(h=>({h,r:modelResults.get(h.steps)}))
     .filter(x=>x.r?.ok);
 
-  if(!okResults.length){
+  if(!dense.length){
     clearCanvas($("forecastChart"));
     return;
   }
 
-  const originTs=okResults[0].r.latestTs;
-  const originTemp=okResults[0].r.latestTemp;
+  const originTs=dense[0].r.latestTs;
+  const originTemp=dense[0].r.latestTemp;
 
-  if(!okResults.every(x=>x.r.latestTs===originTs)){
+  if(!dense.every(x=>x.r.latestTs===originTs)){
     clearCanvas($("forecastChart"));
     return;
   }
@@ -1020,24 +1081,23 @@ function drawForecastChart(){
   const base=[{x:originTs,y:originTemp}];
   const adopted=[{x:originTs,y:originTemp}];
 
-  for(const {h,r} of okResults){
+  for(const {h,r} of dense){
     const x=r.latestTs+h.minutes*60000;
-
     ai.push({x,y:r.forecast});
     base.push({x,y:r.baselineForecast});
     adopted.push({x,y:r.adoptedForecast});
   }
 
   drawTimeChart($("forecastChart"),[
-    {label:"AI予測",points:ai,color:"#6ea8fe",width:2.2,dash:[5,4]},
-    {label:"単純",points:base,color:"#9ca8ba",width:1.8,dash:[7,5]},
-    {label:"採用予報",points:adopted,color:"#f7c65d",width:3.2}
+    {label:"AI予測",points:ai,color:"#6ea8fe",width:2.0,dash:[5,4]},
+    {label:"単純",points:base,color:"#9ca8ba",width:1.6,dash:[7,5]},
+    {label:"採用予報",points:adopted,color:"#f7c65d",width:3.0}
   ],{current:{x:originTs,y:originTemp}});
 }
 
 function renderSelectedBacktest(){
   const steps=Number($("backtestHorizon").value);
-  const h=HORIZONS.find(x=>x.steps===steps);
+  const h=DISPLAY_HORIZONS.find(x=>x.steps===steps);
   const r=modelResults.get(steps);
   if(!r?.ok){
     clearCanvas($("backtestChart"));
@@ -1059,7 +1119,7 @@ function renderSelectedBacktest(){
 
 function renderExplanation(){
   const steps=Number($("explainHorizon").value);
-  const h=HORIZONS.find(x=>x.steps===steps);
+  const h=DISPLAY_HORIZONS.find(x=>x.steps===steps);
   const r=modelResults.get(steps);
 
   if(!r?.ok){
