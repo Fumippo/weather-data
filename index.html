@@ -3,1084 +3,872 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>気象データ変換・予測</title>
+<title>Weather Forecast Lab</title>
 <style>
-body{font-family:system-ui,-apple-system,sans-serif;max-width:1100px;margin:24px auto;padding:0 14px;line-height:1.55}
-h1,h2{margin-bottom:8px}
-input,button,textarea{font:inherit}
-input{padding:8px;margin:4px 8px 8px 0}
-button{padding:10px 16px;margin:6px 8px 6px 0;cursor:pointer}
-textarea{width:100%;height:340px;box-sizing:border-box;font-family:monospace;white-space:pre}
-#status{white-space:pre-wrap;background:#f3f3f3;padding:12px;margin:14px 0}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;margin:14px 0}
-.card{border:1px solid #ccc;border-radius:8px;padding:12px}
-.big{font-size:1.45rem;font-weight:700}
-canvas{width:100%;height:360px;border:1px solid #ccc;border-radius:8px;margin-top:12px}
-.row{display:flex;gap:14px;flex-wrap:wrap}
-.small{font-size:.9rem}
+:root{
+  --bg:#0b1020;
+  --panel:#121a2d;
+  --panel2:#182238;
+  --line:#2a3856;
+  --text:#eef4ff;
+  --muted:#a9b7cf;
+  --good:#2fc47e;
+  --bad:#ff6b6b;
+  --warn:#f7c65d;
+  --accent:#6ea8fe;
+  --accent2:#9b8cff;
+  --shadow:0 14px 34px rgba(0,0,0,.28);
+}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  background:linear-gradient(180deg,#08101f,#0e1424 35%,#0b1020);
+  color:var(--text);
+}
+.wrap{max-width:1380px;margin:0 auto;padding:24px}
+.hero{
+  display:flex;justify-content:space-between;gap:18px;align-items:flex-end;
+  margin-bottom:18px
+}
+h1{font-size:clamp(1.8rem,4vw,3.2rem);margin:0;letter-spacing:-.04em}
+.hero p{margin:6px 0 0;color:var(--muted)}
+.badge{
+  border:1px solid var(--line);background:rgba(255,255,255,.04);
+  padding:8px 12px;border-radius:999px;color:var(--muted);white-space:nowrap
+}
+.grid{display:grid;grid-template-columns:1.1fr .9fr;gap:16px}
+.panel{
+  background:rgba(18,26,45,.94);border:1px solid var(--line);border-radius:18px;
+  box-shadow:var(--shadow);padding:18px
+}
+.panel h2{margin:0 0 12px;font-size:1.1rem}
+.panel h3{margin:18px 0 10px;font-size:1rem}
+label{font-size:.86rem;color:var(--muted);display:block;margin-bottom:5px}
+input,select,textarea,button{font:inherit}
+input,select,textarea{
+  width:100%;background:#0e1728;color:var(--text);border:1px solid var(--line);
+  border-radius:11px;padding:10px 11px;outline:none
+}
+input:focus,select:focus,textarea:focus{border-color:var(--accent)}
+textarea{
+  min-height:330px;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  line-height:1.45;white-space:pre
+}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+button{
+  border:1px solid var(--line);border-radius:10px;padding:9px 13px;cursor:pointer;
+  background:#1a2741;color:var(--text)
+}
+button.primary{background:linear-gradient(135deg,#3e7cf3,#7568f4);border:none}
+button.danger{background:#3a1b25;border-color:#6c2b3a}
+button.ghost{background:transparent}
+button:hover{filter:brightness(1.08)}
+.drop{
+  border:1px dashed #4b6088;border-radius:13px;padding:18px;text-align:center;color:var(--muted);
+  background:rgba(110,168,254,.04)
+}
+.drop.drag{border-color:var(--accent);background:rgba(110,168,254,.12)}
+.file-list{
+  max-height:150px;overflow:auto;margin-top:10px;font-size:.86rem;color:var(--muted)
+}
+.file-item{display:flex;justify-content:space-between;gap:8px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.05)}
+.status{
+  margin-top:12px;padding:12px;border-radius:12px;background:#0d1728;color:var(--muted);
+  white-space:pre-wrap;min-height:48px
+}
+.full{grid-column:1/-1}
+.kpis{
+  display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin-top:16px
+}
+.kpi{
+  padding:14px;border:1px solid var(--line);background:var(--panel2);border-radius:14px
+}
+.kpi .label{font-size:.78rem;color:var(--muted)}
+.kpi .value{font-size:1.35rem;font-weight:760;margin-top:4px;letter-spacing:-.03em}
+.kpi.good{border-color:rgba(47,196,126,.55)}
+.kpi.bad{border-color:rgba(255,107,107,.65)}
+.forecast-grid{
+  display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px;margin-top:12px
+}
+.forecast-card{
+  border:1px solid var(--line);border-radius:13px;padding:11px;background:#101a2d
+}
+.forecast-card .h{color:var(--muted);font-size:.76rem}
+.forecast-card .temp{font-size:1.35rem;font-weight:760;margin:5px 0}
+.forecast-card .sub{font-size:.75rem;color:var(--muted);line-height:1.35}
+.goodText{color:var(--good)!important}
+.badText{color:var(--bad)!important}
+.warnText{color:var(--warn)!important}
+.chart-wrap{position:relative;height:390px;margin-top:10px}
+canvas{
+  width:100%;height:100%;display:block;background:#0d1525;border:1px solid var(--line);
+  border-radius:14px
+}
+.legend{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:.8rem;margin-top:8px}
+.dot{display:inline-block;width:10px;height:3px;vertical-align:middle;margin-right:5px;border-radius:10px}
+.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:13px}
+table{width:100%;border-collapse:collapse;font-size:.86rem}
+th,td{padding:9px 10px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+th{position:sticky;top:0;background:#172239;color:#c9d5e8}
+.explain{
+  background:#0e1728;border:1px solid var(--line);border-radius:13px;padding:13px;
+  color:#cbd7e9;line-height:1.65
+}
+.explain code{color:#fff}
+.split{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.small{font-size:.8rem;color:var(--muted)}
+@media(max-width:1000px){
+  .grid,.split{grid-template-columns:1fr}
+  .kpis{grid-template-columns:repeat(3,1fr)}
+  .forecast-grid{grid-template-columns:repeat(3,1fr)}
+}
+@media(max-width:620px){
+  .wrap{padding:12px}
+  .hero{align-items:flex-start;flex-direction:column}
+  .row{grid-template-columns:1fr}
+  .kpis{grid-template-columns:repeat(2,1fr)}
+  .forecast-grid{grid-template-columns:repeat(2,1fr)}
+}
 </style>
 </head>
 <body>
+<div class="wrap">
+  <div class="hero">
+    <div>
+      <h1>Weather Forecast Lab</h1>
+      <p>10分値をTSV化し、複数日のデータから多時間先を直接予測するブラウザ完結型ダッシュボード</p>
+    </div>
+    <div class="badge">HTML + JavaScript / 外部ライブラリなし</div>
+  </div>
 
-<h1>気象データ変換・60分後気温予測</h1>
+  <div class="grid">
+    <section class="panel">
+      <h2>今日の生データ</h2>
+      <div class="row">
+        <div><label>日付</label><input id="date" type="date"></div>
+        <div><label>地点</label><input id="station" type="text" placeholder="大阪"></div>
+      </div>
+      <label style="margin-top:8px">気象10分値</label>
+      <textarea id="raw" placeholder="表をそのまま貼り付け"></textarea>
+      <div class="actions">
+        <button id="clipboard">クリップボードから取込</button>
+        <button id="selectAll">全選択</button>
+        <button id="clearRaw" class="danger">貼り付け欄を全カット</button>
+        <button id="convert">TSV化</button>
+        <button id="downloadCurrent">今日のTSV保存</button>
+      </div>
+      <div id="convertStatus" class="status">まだTSV化していません。</div>
+    </section>
 
-<h2>1. 今日の生データ</h2>
+    <section class="panel">
+      <h2>過去TSV</h2>
+      <div id="drop" class="drop">
+        ここへTSVをまとめてドロップ<br>
+        <span class="small">または下から複数選択</span>
+      </div>
+      <input id="historyFiles" type="file" accept=".tsv,.txt" multiple style="margin-top:10px">
+      <div class="actions">
+        <button id="clearFiles" class="danger">過去TSVを全解除</button>
+        <button id="run" class="primary">統合・学習・多時間予測</button>
+      </div>
+      <div id="fileList" class="file-list"></div>
+      <div id="runStatus" class="status">過去TSVを選択してください。</div>
 
-<div class="row">
-  <label>
-    日付<br>
-    <input id="date" type="date">
-  </label>
+      <h3>表示する検証時間</h3>
+      <select id="backtestHorizon">
+        <option value="1">10分後</option>
+        <option value="3">30分後</option>
+        <option value="6" selected>1時間後</option>
+        <option value="12">2時間後</option>
+        <option value="18">3時間後</option>
+        <option value="36">6時間後</option>
+        <option value="72">12時間後</option>
+        <option value="144">24時間後</option>
+      </select>
+    </section>
 
-  <label>
-    地点<br>
-    <input id="station" type="text" placeholder="大阪">
-  </label>
+    <section class="panel full">
+      <h2>データ状況</h2>
+      <div class="kpis">
+        <div class="kpi"><div class="label">観測行</div><div id="rowsKpi" class="value">-</div></div>
+        <div class="kpi"><div class="label">データ日数</div><div id="daysKpi" class="value">-</div></div>
+        <div class="kpi"><div class="label">期間</div><div id="periodKpi" class="value" style="font-size:1rem">-</div></div>
+        <div class="kpi"><div class="label">最新観測</div><div id="latestKpi" class="value" style="font-size:1rem">-</div></div>
+        <div class="kpi"><div class="label">最新気温</div><div id="latestTempKpi" class="value">-</div></div>
+        <div class="kpi"><div class="label">地点</div><div id="stationKpi" class="value" style="font-size:1rem">-</div></div>
+      </div>
+    </section>
+
+    <section class="panel full">
+      <h2>未来予測</h2>
+      <div id="forecastGrid" class="forecast-grid"></div>
+      <div class="chart-wrap"><canvas id="forecastChart" width="1250" height="390"></canvas></div>
+      <div class="legend">
+        <span><i class="dot" style="background:#6ea8fe"></i>AI予測</span>
+        <span><i class="dot" style="background:#9ca8ba"></i>単純予報</span>
+        <span><i class="dot" style="background:#2fc47e"></i>現在実測</span>
+      </div>
+    </section>
+
+    <section class="panel full">
+      <h2>過去検証グラフ</h2>
+      <div id="backtestTitle" class="small">時間を選んでください。</div>
+      <div class="chart-wrap"><canvas id="backtestChart" width="1250" height="390"></canvas></div>
+      <div class="legend">
+        <span><i class="dot" style="background:#eef4ff"></i>実測</span>
+        <span><i class="dot" style="background:#6ea8fe"></i>AI</span>
+        <span><i class="dot" style="background:#9ca8ba"></i>単純予報</span>
+      </div>
+    </section>
+
+    <section class="panel full">
+      <h2>時間別の精度</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>予測先</th><th>AI予測</th><th>AI MAE</th><th>単純MAE</th>
+              <th>改善率</th><th>学習数</th><th>テスト数</th><th>判定</th>
+            </tr>
+          </thead>
+          <tbody id="metricsBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <div class="split full">
+      <section class="panel">
+        <h2>AIは今どう数値を作ったか</h2>
+        <select id="explainHorizon">
+          <option value="1">10分後</option>
+          <option value="3">30分後</option>
+          <option value="6" selected>1時間後</option>
+          <option value="12">2時間後</option>
+          <option value="18">3時間後</option>
+          <option value="36">6時間後</option>
+          <option value="72">12時間後</option>
+          <option value="144">24時間後</option>
+        </select>
+        <div id="formula" class="explain" style="margin-top:10px">学習後に表示します。</div>
+        <div class="table-wrap" style="margin-top:10px;max-height:340px">
+          <table>
+            <thead><tr><th>入力要素</th><th>現在値</th><th>寄与</th></tr></thead>
+            <tbody id="contribBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>モデルについて</h2>
+        <div class="explain">
+          <b>予測方式：</b>時間ごとの直接リッジ回帰。<br>
+          10分後、1時間後、6時間後、24時間後を「同じモデルの繰り返し」ではなく、
+          それぞれ別モデルとして学習します。<br><br>
+          <b>主な入力：</b>現在の気温・湿度・海面気圧・風速・日照、
+          10分/30分/1時間/3時間/24時間の変化、時刻、季節周期。<br><br>
+          <b>検証：</b>古い80%で学習、新しい20%でテスト。
+          未来予測そのものは検証後に全利用可能データで再学習したモデルを使用します。<br><br>
+          <b>比較：</b>「未来も現在気温と同じ」とする単純予報と常に比較します。
+          AIが負けている時間帯は、そのことを赤字で表示します。
+        </div>
+      </section>
+    </div>
+  </div>
 </div>
-
-<textarea id="raw" placeholder="ここに10分値の表をそのまま貼り付け"></textarea>
-
-<div>
-  <button id="convert">生データをTSV化</button>
-  <button id="downloadCurrent">今日のTSVを保存</button>
-</div>
-
-<h2>2. 過去のTSV</h2>
-
-<input id="historyFiles" type="file" accept=".tsv,.txt" multiple>
-
-<p class="small">
-過去のTSVをまとめて選択してください。今日の生データは上でTSV化した内容を自動的に結合します。
-</p>
-
-<div>
-  <button id="predict">過去TSV＋今日のデータで学習・予測</button>
-</div>
-
-<div id="status">生データを貼り付けるか、過去TSVを選択してください。</div>
-
-<div class="cards">
-  <div class="card">
-    <div>過去TSV</div>
-    <div id="fileCount" class="big">-</div>
-  </div>
-  <div class="card">
-    <div>全観測行</div>
-    <div id="rowCount" class="big">-</div>
-  </div>
-  <div class="card">
-    <div>学習サンプル</div>
-    <div id="sampleCount" class="big">-</div>
-  </div>
-  <div class="card">
-    <div>AI MAE</div>
-    <div id="modelMae" class="big">-</div>
-  </div>
-  <div class="card">
-    <div>単純予報 MAE</div>
-    <div id="baseMae" class="big">-</div>
-  </div>
-  <div class="card">
-    <div>60分後予測</div>
-    <div id="futureTemp" class="big">-</div>
-  </div>
-</div>
-
-<canvas id="chart" width="1000" height="360"></canvas>
 
 <script>
 const $ = id => document.getElementById(id);
 
+const HORIZONS = [
+  {steps:1,label:"10分",minutes:10},
+  {steps:3,label:"30分",minutes:30},
+  {steps:6,label:"1時間",minutes:60},
+  {steps:12,label:"2時間",minutes:120},
+  {steps:18,label:"3時間",minutes:180},
+  {steps:36,label:"6時間",minutes:360},
+  {steps:72,label:"12時間",minutes:720},
+  {steps:144,label:"24時間",minutes:1440}
+];
+
+const FEATURE_NAMES = [
+  "現在気温","現在湿度","海面気圧","風速","日照",
+  "気温10分変化","気温30分変化","気温1時間変化","気温3時間変化","気温24時間差",
+  "気圧30分変化","気圧1時間変化","気圧3時間変化","気圧24時間差",
+  "湿度30分変化","湿度1時間変化","湿度3時間変化",
+  "風速30分変化","風速1時間変化",
+  "時刻sin","時刻cos","季節sin","季節cos"
+];
+
+let stagedFiles = [];
 let currentRows = [];
 let currentTsv = "";
+let globalRows = [];
+let modelResults = new Map();
 
 setToday();
 
-$("convert").addEventListener("click", () => {
-  try {
-    const date = $("date").value.trim();
-    const station = $("station").value.trim();
-    const raw = $("raw").value;
+$("historyFiles").addEventListener("change", e => {
+  stagedFiles = uniqueFiles([...stagedFiles, ...e.target.files]);
+  renderFileList();
+});
 
-    if (!date) throw new Error("日付を入力してください。");
-    if (!station) throw new Error("地点を入力してください。");
-    if (!raw.trim()) throw new Error("生データを貼り付けてください。");
+$("drop").addEventListener("dragover", e => {
+  e.preventDefault(); $("drop").classList.add("drag");
+});
+$("drop").addEventListener("dragleave", () => $("drop").classList.remove("drag"));
+$("drop").addEventListener("drop", e => {
+  e.preventDefault(); $("drop").classList.remove("drag");
+  const files = [...e.dataTransfer.files].filter(f => /\.(tsv|txt)$/i.test(f.name));
+  stagedFiles = uniqueFiles([...stagedFiles, ...files]);
+  renderFileList();
+});
 
-    const parsed = parseRawWeather(raw, date, station);
+$("clearFiles").addEventListener("click", () => {
+  stagedFiles = [];
+  $("historyFiles").value = "";
+  renderFileList();
+});
 
-    currentRows = parsed.rows;
-    currentTsv = parsed.tsv;
+$("clearRaw").addEventListener("click", () => {
+  $("raw").value = "";
+  currentRows = [];
+  currentTsv = "";
+  $("convertStatus").textContent = "貼り付け欄を空にしました。";
+});
 
-    $("status").textContent =
-      `TSV化完了\n${currentRows.length}行を認識しました。`;
+$("selectAll").addEventListener("click", () => {
+  $("raw").focus(); $("raw").select();
+});
 
-  } catch (e) {
-    $("status").textContent = "エラー\n" + e.message;
+$("clipboard").addEventListener("click", async () => {
+  try{
+    const text = await navigator.clipboard.readText();
+    if(!text.trim()) throw new Error("クリップボードが空です。");
+    $("raw").value = text;
+    $("convertStatus").textContent = "クリップボードから取り込みました。";
+  }catch(e){
+    $("convertStatus").textContent = "クリップボードを読み取れません。\n" + e.message;
   }
 });
 
+$("convert").addEventListener("click", () => {
+  try{
+    const parsed = convertCurrentRaw();
+    $("convertStatus").textContent =
+      `TSV化完了：${parsed.rows.length}行\n${$("date").value} / ${$("station").value.trim()}`;
+  }catch(e){
+    $("convertStatus").textContent = "エラー\n" + e.message;
+  }
+});
 
 $("downloadCurrent").addEventListener("click", () => {
-  try {
-    if (!currentTsv) {
-      $("convert").click();
-    }
-
-    if (!currentTsv) {
-      return;
-    }
-
+  try{
+    if(!currentTsv) convertCurrentRaw();
     const date = $("date").value.trim();
     const station = $("station").value.trim();
-
-    const filename =
-      `${date}_${safeFileName(station)}.tsv`;
-
-    download(
-      filename,
-      currentTsv,
-      "text/tab-separated-values;charset=utf-8"
-    );
-
-    $("status").textContent =
-      `保存しました\n${filename}`;
-
-  } catch (e) {
-    $("status").textContent = "エラー\n" + e.message;
+    download(`${date}_${safeFileName(station)}.tsv`, currentTsv, "text/tab-separated-values;charset=utf-8");
+  }catch(e){
+    $("convertStatus").textContent = "エラー\n" + e.message;
   }
 });
 
+$("run").addEventListener("click", runAll);
+$("backtestHorizon").addEventListener("change", renderSelectedBacktest);
+$("explainHorizon").addEventListener("change", renderExplanation);
 
-$("predict").addEventListener("click", async () => {
-  try {
-    $("status").textContent = "読み込み・学習中...";
-
-    const historyFiles = [...$("historyFiles").files];
-    const allRows = [];
-
-    for (const file of historyFiles) {
-      const text = await file.text();
-      allRows.push(...parseTsvRows(text));
-    }
-
-    if ($("raw").value.trim()) {
-      const date = $("date").value.trim();
-      const station = $("station").value.trim();
-
-      const parsed = parseRawWeather(
-        $("raw").value,
-        date,
-        station
-      );
-
-      currentRows = parsed.rows;
-      currentTsv = parsed.tsv;
-
-      allRows.push(...currentRows);
-    }
-
-    const rows = deduplicateRows(allRows);
-
-    rows.sort((a,b) => a.ts - b.ts);
-
-    if (rows.length < 50) {
-      throw new Error(
-        "観測データが少なすぎます。過去TSVを追加してください。"
-      );
-    }
-
-    const samples = buildSamples(rows);
-
-    if (samples.length < 100) {
-      throw new Error(
-        "60分先の教師データが少なすぎます。\n" +
-        "さらに過去TSVを追加してください。"
-      );
-    }
-
-    const split = Math.floor(samples.length * 0.8);
-
-    const train = samples.slice(0, split);
-    const test = samples.slice(split);
-
-    if (train.length < 50 || test.length < 20) {
-      throw new Error("学習用またはテスト用データが不足しています。");
-    }
-
-    const model = trainRidgeRegression(train);
-
-    const predictions =
-      test.map(s => predictModel(model, s.x));
-
-    const actual =
-      test.map(s => s.y);
-
-    const baseline =
-      test.map(s => s.currentTemp);
-
-    const modelMae =
-      mae(actual, predictions);
-
-    const baseMae =
-      mae(actual, baseline);
-
-    const latestFeature =
-      buildLatestFeature(rows);
-
-    let futureText = "算出不可";
-
-    if (latestFeature) {
-      const predicted =
-        predictModel(model, latestFeature.x);
-
-      futureText =
-        predicted.toFixed(1) + " ℃";
-    }
-
-    $("fileCount").textContent =
-      historyFiles.length;
-
-    $("rowCount").textContent =
-      rows.length.toLocaleString();
-
-    $("sampleCount").textContent =
-      samples.length.toLocaleString();
-
-    $("modelMae").textContent =
-      modelMae.toFixed(3) + " ℃";
-
-    $("baseMae").textContent =
-      baseMae.toFixed(3) + " ℃";
-
-    $("futureTemp").textContent =
-      futureText;
-
-    const improvement =
-      baseMae > 0
-        ? (baseMae - modelMae) / baseMae * 100
-        : 0;
-
-    $("status").textContent =
-      "予測完了\n" +
-      `AI MAE: ${modelMae.toFixed(3)} ℃\n` +
-      `単純予報 MAE: ${baseMae.toFixed(3)} ℃\n` +
-      `改善率: ${improvement.toFixed(1)} %`;
-
-    drawChart(actual, predictions);
-
-  } catch (e) {
-    $("status").textContent =
-      "エラー\n" + e.message;
-  }
-});
-
-
-function setToday() {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth()+1).padStart(2,"0");
-  const day = String(d.getDate()).padStart(2,"0");
-
-  $("date").value = `${y}-${m}-${day}`;
+function setToday(){
+  const d=new Date();
+  $("date").value =
+    `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
 }
 
+function uniqueFiles(files){
+  const m=new Map();
+  for(const f of files) m.set(`${f.name}|${f.size}|${f.lastModified}`,f);
+  return [...m.values()];
+}
 
-function parseRawWeather(raw, date, station) {
-  const lines = normalizeNewlines(raw).split("\n");
-  const timePattern =
-    /^(?:[01]\d|2[0-3]):[0-5]\d$|^24:00$/;
+function renderFileList(){
+  $("fileList").innerHTML = stagedFiles.length
+    ? stagedFiles.map(f=>`<div class="file-item"><span>${escapeHtml(f.name)}</span><span>${formatBytes(f.size)}</span></div>`).join("")
+    : `<div class="small">未選択</div>`;
+}
 
-  const sourceRows = [];
+async function runAll(){
+  try{
+    $("runStatus").textContent="読み込み中...";
+    const all=[];
 
-  for (const originalLine of lines) {
-    const line = originalLine.trim();
-
-    if (!line) continue;
-
-    const parts = line.split(/\s+/);
-
-    if (!timePattern.test(parts[0])) {
-      continue;
+    for(const file of stagedFiles){
+      const text=await file.text();
+      all.push(...parseTsvRows(text));
     }
 
-    if (parts.length === 10) {
-      parts.push("");
+    if($("raw").value.trim()){
+      const parsed=convertCurrentRaw();
+      all.push(...parsed.rows);
     }
 
-    if (parts.length !== 11) {
-      throw new Error(
-        "列数を認識できない行があります。\n\n" +
-        originalLine +
-        "\n\n認識列数：" +
-        parts.length
-      );
+    globalRows=deduplicateRows(all).sort((a,b)=>a.ts-b.ts);
+
+    if(globalRows.length<100) throw new Error("データが少なすぎます。");
+
+    renderDataSummary(globalRows);
+
+    modelResults=new Map();
+
+    for(const h of HORIZONS){
+      $("runStatus").textContent=`学習中... ${h.label}後モデル`;
+      await nextFrame();
+      const result=trainForHorizon(globalRows,h.steps);
+      modelResults.set(h.steps,result);
     }
 
-    sourceRows.push(parts);
+    renderMetrics();
+    renderForecastCards();
+    drawForecastChart();
+    renderSelectedBacktest();
+    renderExplanation();
+
+    $("runStatus").textContent =
+      `完了：${stagedFiles.length}個の過去TSV + 今日の入力を統合\n` +
+      `観測 ${globalRows.length.toLocaleString()}行 / ${countDays(globalRows)}日`;
+  }catch(e){
+    $("runStatus").textContent="エラー\n"+e.message;
+  }
+}
+
+function convertCurrentRaw(){
+  const date=$("date").value.trim();
+  const station=$("station").value.trim();
+  const raw=$("raw").value;
+  if(!date) throw new Error("日付を入力してください。");
+  if(!station) throw new Error("地点を入力してください。");
+  if(!raw.trim()) throw new Error("生データを貼り付けてください。");
+
+  const lines=normalizeNewlines(raw).split("\n");
+  const timePattern=/^(?:[01]\d|2[0-3]):[0-5]\d$|^24:00$/;
+  const source=[];
+
+  for(const original of lines){
+    const line=original.trim();
+    if(!line) continue;
+    const parts=line.split(/\s+/);
+    if(!timePattern.test(parts[0])) continue;
+    if(parts.length===10) parts.push("");
+    if(parts.length!==11){
+      throw new Error(`列数を認識できない行があります。\n${original}\n認識列数: ${parts.length}`);
+    }
+    source.push(parts);
   }
 
-  if (!sourceRows.length) {
-    throw new Error("観測行を認識できませんでした。");
-  }
+  if(!source.length) throw new Error("観測行を認識できません。");
 
-  const header = [
-    "date",
-    "station",
-    "time",
-    "pressure_local_hpa",
-    "pressure_sea_hpa",
-    "precip_mm",
-    "temperature_c",
-    "humidity_pct",
-    "wind_speed_ms",
-    "wind_direction",
-    "gust_speed_ms",
-    "gust_direction",
-    "sunshine_min"
+  const header=[
+    "date","station","time","pressure_local_hpa","pressure_sea_hpa","precip_mm",
+    "temperature_c","humidity_pct","wind_speed_ms","wind_direction",
+    "gust_speed_ms","gust_direction","sunshine_min"
   ];
 
-  const tsv = [
+  currentTsv=[
     header.join("\t"),
-    ...sourceRows.map(row =>
-      [date, station, ...row].join("\t")
-    )
-  ].join("\n") + "\n";
+    ...source.map(r=>[date,station,...r].join("\t"))
+  ].join("\n")+"\n";
 
-  const rows = sourceRows
-    .map(row => rawRowToObject(date, station, row))
-    .filter(Boolean);
-
-  return { tsv, rows };
+  currentRows=source.map(r=>rawRowToObject(date,station,r)).filter(Boolean);
+  return {rows:currentRows,tsv:currentTsv};
 }
 
+function rawRowToObject(date,station,r){
+  const ts=parseDateTime(date,r[0]);
+  const obj={
+    ts,date,time:r[0],station,
+    temperature:toNumber(r[4]),
+    humidity:toNumber(r[5]),
+    pressure:toNumber(r[2]),
+    wind:toNumber(r[6]),
+    sunshine:toNumber(r[10])
+  };
+  if(!Number.isFinite(obj.ts)||!Number.isFinite(obj.temperature)||!Number.isFinite(obj.humidity)||
+     !Number.isFinite(obj.pressure)||!Number.isFinite(obj.wind)) return null;
+  if(!Number.isFinite(obj.sunshine)) obj.sunshine=0;
+  return obj;
+}
 
-function rawRowToObject(date, station, row) {
-  const ts = parseDateTime(date, row[0]);
+function parseTsvRows(text){
+  const lines=normalizeNewlines(text).split("\n").filter(x=>x.trim()!=="");
+  if(lines.length<2) return [];
+  const header=lines[0].replace(/^\uFEFF/,"").split("\t");
+  const required=["date","station","time","pressure_sea_hpa","temperature_c","humidity_pct","wind_speed_ms","sunshine_min"];
+  for(const n of required) if(!header.includes(n)) throw new Error("TSVに必要な列がありません: "+n);
+  const idx=Object.fromEntries(header.map((n,i)=>[n,i]));
+  const out=[];
 
-  const temperature = toNumber(row[4]);
-  const humidity = toNumber(row[5]);
-  const pressure = toNumber(row[2]);
-  const wind = toNumber(row[6]);
-  const sunshine = toNumber(row[10]);
+  for(const line of lines.slice(1)){
+    const v=line.split("\t");
+    const date=v[idx.date]??"", time=v[idx.time]??"", station=v[idx.station]??"";
+    const row={
+      ts:parseDateTime(date,time),date,time,station,
+      temperature:toNumber(v[idx.temperature_c]),
+      humidity:toNumber(v[idx.humidity_pct]),
+      pressure:toNumber(v[idx.pressure_sea_hpa]),
+      wind:toNumber(v[idx.wind_speed_ms]),
+      sunshine:toNumber(v[idx.sunshine_min])
+    };
+    if(!Number.isFinite(row.sunshine)) row.sunshine=0;
+    if([row.ts,row.temperature,row.humidity,row.pressure,row.wind].every(Number.isFinite)) out.push(row);
+  }
+  return out;
+}
 
-  if (
-    !Number.isFinite(ts) ||
-    !Number.isFinite(temperature) ||
-    !Number.isFinite(humidity) ||
-    !Number.isFinite(pressure) ||
-    !Number.isFinite(wind)
-  ) {
-    return null;
+function trainForHorizon(rows,steps){
+  const samples=buildSamples(rows,steps);
+  if(samples.length<120){
+    return {ok:false,samples,error:"学習サンプル不足"};
   }
 
+  const split=Math.floor(samples.length*.8);
+  const train=samples.slice(0,split);
+  const test=samples.slice(split);
+
+  if(train.length<80||test.length<20){
+    return {ok:false,samples,error:"検証サンプル不足"};
+  }
+
+  const evalModel=trainRidgeClosedForm(train,0.8);
+  const pred=test.map(s=>predictModel(evalModel,s.x));
+  const actual=test.map(s=>s.y);
+  const baseline=test.map(s=>s.currentTemp);
+  const modelMae=mae(actual,pred);
+  const baseMae=mae(actual,baseline);
+
+  // 最終予測は全教師データで再学習
+  const finalModel=trainRidgeClosedForm(samples,0.8);
+  const latest=buildLatestFeature(rows);
+
+  if(!latest){
+    return {ok:false,samples,error:"最新特徴量を作れません"};
+  }
+
+  const forecast=predictModel(finalModel,latest.x);
+  const contributions=getContributions(finalModel,latest.x);
+
   return {
-    ts,
-    date,
-    time: row[0],
-    station,
-    temperature,
-    humidity,
-    pressure,
-    wind,
-    sunshine: Number.isFinite(sunshine) ? sunshine : 0
+    ok:true,steps,samples,trainCount:train.length,testCount:test.length,
+    modelMae,baseMae,improvement:baseMae>0?(baseMae-modelMae)/baseMae*100:0,
+    forecast,latestTs:latest.ts,
+    testActual:actual,testPred:pred,testBase:baseline,
+    testTimes:test.map(s=>s.targetTs),
+    model:finalModel,latestX:latest.x,contributions
   };
 }
 
+function buildSamples(rows,steps){
+  const groups=groupByStation(rows), out=[];
+  for(const stationRows of groups.values()){
+    stationRows.sort((a,b)=>a.ts-b.ts);
+    const map=new Map(stationRows.map(r=>[r.ts,r]));
 
-function parseTsvRows(text) {
-  const lines = normalizeNewlines(text)
-    .split("\n")
-    .filter(line => line.trim() !== "");
-
-  if (lines.length < 2) {
-    return [];
-  }
-
-  const header = lines[0].split("\t");
-
-  const required = [
-    "date",
-    "station",
-    "time",
-    "pressure_sea_hpa",
-    "temperature_c",
-    "humidity_pct",
-    "wind_speed_ms",
-    "sunshine_min"
-  ];
-
-  for (const name of required) {
-    if (!header.includes(name)) {
-      throw new Error(
-        "TSVに必要な列がありません: " + name
-      );
+    for(const cur of stationRows){
+      const f=makeFeature(cur,map);
+      const target=map.get(cur.ts+steps*10*60*1000);
+      if(!f||!target) continue;
+      out.push({x:f,y:target.temperature,currentTemp:cur.temperature,ts:cur.ts,targetTs:target.ts});
     }
   }
-
-  const idx =
-    Object.fromEntries(
-      header.map((name,i) => [name,i])
-    );
-
-  const rows = [];
-
-  for (const line of lines.slice(1)) {
-    const v = line.split("\t");
-
-    const date = v[idx.date] ?? "";
-    const time = v[idx.time] ?? "";
-    const station = v[idx.station] ?? "";
-
-    const ts =
-      parseDateTime(date, time);
-
-    const temperature =
-      toNumber(v[idx.temperature_c]);
-
-    const humidity =
-      toNumber(v[idx.humidity_pct]);
-
-    const pressure =
-      toNumber(v[idx.pressure_sea_hpa]);
-
-    const wind =
-      toNumber(v[idx.wind_speed_ms]);
-
-    const sunshine =
-      toNumber(v[idx.sunshine_min]);
-
-    if (
-      !Number.isFinite(ts) ||
-      !Number.isFinite(temperature) ||
-      !Number.isFinite(humidity) ||
-      !Number.isFinite(pressure) ||
-      !Number.isFinite(wind)
-    ) {
-      continue;
-    }
-
-    rows.push({
-      ts,
-      date,
-      time,
-      station,
-      temperature,
-      humidity,
-      pressure,
-      wind,
-      sunshine:
-        Number.isFinite(sunshine)
-          ? sunshine
-          : 0
-    });
-  }
-
-  return rows;
+  return out.sort((a,b)=>a.ts-b.ts);
 }
 
-
-function parseDateTime(date, time) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    return NaN;
-  }
-
-  if (time === "24:00") {
-    return (
-      new Date(date + "T00:00:00").getTime() +
-      24 * 60 * 60 * 1000
-    );
-  }
-
-  if (!/^\d{2}:\d{2}$/.test(time)) {
-    return NaN;
-  }
-
-  return new Date(
-    date + "T" + time + ":00"
-  ).getTime();
-}
-
-
-function toNumber(value) {
-  if (
-    value === undefined ||
-    value === null ||
-    value === "" ||
-    value === "--"
-  ) {
-    return NaN;
-  }
-
-  const n = Number(value);
-
-  return Number.isFinite(n)
-    ? n
-    : NaN;
-}
-
-
-function deduplicateRows(rows) {
-  const map = new Map();
-
-  for (const row of rows) {
-    const key =
-      row.station + "|" + row.ts;
-
-    map.set(key, row);
-  }
-
-  return [...map.values()];
-}
-
-
-function buildSamples(rows) {
-  const byStation =
-    groupByStation(rows);
-
-  const samples = [];
-
-  for (const stationRows of byStation.values()) {
-    stationRows.sort((a,b) => a.ts-b.ts);
-
-    const map =
-      new Map(
-        stationRows.map(r => [r.ts,r])
-      );
-
-    for (const current of stationRows) {
-      const lag10 =
-        map.get(current.ts - 10*60*1000);
-
-      const lag30 =
-        map.get(current.ts - 30*60*1000);
-
-      const lag60 =
-        map.get(current.ts - 60*60*1000);
-
-      const target =
-        map.get(current.ts + 60*60*1000);
-
-      if (
-        !lag10 ||
-        !lag30 ||
-        !lag60 ||
-        !target
-      ) {
-        continue;
-      }
-
-      const x =
-        makeFeatureVector(
-          current,
-          lag10,
-          lag30,
-          lag60
-        );
-
-      if (
-        x.some(v => !Number.isFinite(v))
-      ) {
-        continue;
-      }
-
-      samples.push({
-        x,
-        y: target.temperature,
-        currentTemp: current.temperature,
-        ts: current.ts
-      });
-    }
-  }
-
-  samples.sort((a,b) => a.ts-b.ts);
-
-  return samples;
-}
-
-
-function buildLatestFeature(rows) {
-  const byStation =
-    groupByStation(rows);
-
-  let best = null;
-
-  for (const stationRows of byStation.values()) {
-    stationRows.sort((a,b) => a.ts-b.ts);
-
-    const map =
-      new Map(
-        stationRows.map(r => [r.ts,r])
-      );
-
-    for (
-      let i = stationRows.length-1;
-      i >= 0;
-      i--
-    ) {
-      const current = stationRows[i];
-
-      const lag10 =
-        map.get(current.ts - 10*60*1000);
-
-      const lag30 =
-        map.get(current.ts - 30*60*1000);
-
-      const lag60 =
-        map.get(current.ts - 60*60*1000);
-
-      if (
-        !lag10 ||
-        !lag30 ||
-        !lag60
-      ) {
-        continue;
-      }
-
-      const x =
-        makeFeatureVector(
-          current,
-          lag10,
-          lag30,
-          lag60
-        );
-
-      if (
-        x.some(v => !Number.isFinite(v))
-      ) {
-        continue;
-      }
-
-      if (
-        !best ||
-        current.ts > best.ts
-      ) {
-        best = {
-          ts: current.ts,
-          x
-        };
-      }
-
+function buildLatestFeature(rows){
+  const groups=groupByStation(rows);
+  let best=null;
+  for(const stationRows of groups.values()){
+    stationRows.sort((a,b)=>a.ts-b.ts);
+    const map=new Map(stationRows.map(r=>[r.ts,r]));
+    for(let i=stationRows.length-1;i>=0;i--){
+      const cur=stationRows[i],x=makeFeature(cur,map);
+      if(!x) continue;
+      if(!best||cur.ts>best.ts) best={ts:cur.ts,x,station:cur.station,currentTemp:cur.temperature};
       break;
     }
   }
-
   return best;
 }
 
+function makeFeature(cur,map){
+  const get=(m)=>map.get(cur.ts-m*60*1000);
+  const l10=get(10),l30=get(30),l60=get(60),l180=get(180),l1440=get(1440);
+  if(!l10||!l30||!l60||!l180||!l1440) return null;
 
-function groupByStation(rows) {
-  const map = new Map();
+  const d=new Date(cur.ts);
+  const hour=d.getHours()+d.getMinutes()/60;
+  const dayStart=new Date(d.getFullYear(),0,0);
+  const doy=Math.floor((d-dayStart)/86400000);
+  const ha=2*Math.PI*hour/24;
+  const da=2*Math.PI*doy/365.25;
 
-  for (const row of rows) {
-    if (!map.has(row.station)) {
-      map.set(row.station, []);
-    }
-
-    map.get(row.station).push(row);
-  }
-
-  return map;
-}
-
-
-function makeFeatureVector(
-  current,
-  lag10,
-  lag30,
-  lag60
-) {
-  const d =
-    new Date(current.ts);
-
-  const hour =
-    d.getHours() +
-    d.getMinutes()/60;
-
-  const angle =
-    2*Math.PI*hour/24;
-
-  return [
-    current.temperature,
-    current.humidity,
-    current.pressure,
-    current.wind,
-    current.sunshine,
-
-    current.temperature-lag10.temperature,
-    current.temperature-lag30.temperature,
-    current.temperature-lag60.temperature,
-
-    current.pressure-lag30.pressure,
-    current.pressure-lag60.pressure,
-
-    current.humidity-lag30.humidity,
-    current.humidity-lag60.humidity,
-
-    current.wind-lag30.wind,
-    current.wind-lag60.wind,
-
-    Math.sin(angle),
-    Math.cos(angle)
+  const x=[
+    cur.temperature,cur.humidity,cur.pressure,cur.wind,cur.sunshine,
+    cur.temperature-l10.temperature,
+    cur.temperature-l30.temperature,
+    cur.temperature-l60.temperature,
+    cur.temperature-l180.temperature,
+    cur.temperature-l1440.temperature,
+    cur.pressure-l30.pressure,
+    cur.pressure-l60.pressure,
+    cur.pressure-l180.pressure,
+    cur.pressure-l1440.pressure,
+    cur.humidity-l30.humidity,
+    cur.humidity-l60.humidity,
+    cur.humidity-l180.humidity,
+    cur.wind-l30.wind,
+    cur.wind-l60.wind,
+    Math.sin(ha),Math.cos(ha),Math.sin(da),Math.cos(da)
   ];
+  return x.every(Number.isFinite)?x:null;
 }
 
+function trainRidgeClosedForm(samples,lambda){
+  const X=samples.map(s=>s.x), y=samples.map(s=>s.y), p=X[0].length, n=X.length;
+  const xMean=Array(p).fill(0),xStd=Array(p).fill(0);
+  for(const r of X) for(let j=0;j<p;j++) xMean[j]+=r[j];
+  for(let j=0;j<p;j++) xMean[j]/=n;
+  for(const r of X) for(let j=0;j<p;j++) xStd[j]+=(r[j]-xMean[j])**2;
+  for(let j=0;j<p;j++){xStd[j]=Math.sqrt(xStd[j]/n);if(xStd[j]<1e-9)xStd[j]=1}
 
-function trainRidgeRegression(samples) {
-  const X =
-    samples.map(s => s.x);
+  const yMean=y.reduce((a,b)=>a+b,0)/n;
+  let yStd=Math.sqrt(y.reduce((s,v)=>s+(v-yMean)**2,0)/n);
+  if(yStd<1e-9)yStd=1;
 
-  const y =
-    samples.map(s => s.y);
+  const A=Array.from({length:p},()=>Array(p).fill(0));
+  const b=Array(p).fill(0);
 
-  const cols =
-    X[0].length;
-
-  const xMean =
-    Array(cols).fill(0);
-
-  const xStd =
-    Array(cols).fill(0);
-
-  for (const row of X) {
-    for (let j=0;j<cols;j++) {
-      xMean[j] += row[j];
+  for(let i=0;i<n;i++){
+    const z=X[i].map((v,j)=>(v-xMean[j])/xStd[j]);
+    const ty=(y[i]-yMean)/yStd;
+    for(let j=0;j<p;j++){
+      b[j]+=z[j]*ty;
+      for(let k=0;k<p;k++) A[j][k]+=z[j]*z[k];
     }
   }
+  for(let j=0;j<p;j++) A[j][j]+=lambda*n;
 
-  for (let j=0;j<cols;j++) {
-    xMean[j] /= X.length;
-  }
-
-  for (const row of X) {
-    for (let j=0;j<cols;j++) {
-      const d =
-        row[j]-xMean[j];
-
-      xStd[j] += d*d;
-    }
-  }
-
-  for (let j=0;j<cols;j++) {
-    xStd[j] =
-      Math.sqrt(
-        xStd[j]/X.length
-      );
-
-    if (xStd[j] < 1e-9) {
-      xStd[j] = 1;
-    }
-  }
-
-  const yMean =
-    y.reduce((a,b)=>a+b,0)/y.length;
-
-  let yStd =
-    Math.sqrt(
-      y.reduce(
-        (sum,v)=>
-          sum+(v-yMean)**2,
-        0
-      )/y.length
-    );
-
-  if (yStd < 1e-9) {
-    yStd = 1;
-  }
-
-  const Z =
-    X.map(row =>
-      row.map(
-        (v,j)=>
-          (v-xMean[j])/xStd[j]
-      )
-    );
-
-  const zy =
-    y.map(
-      v => (v-yMean)/yStd
-    );
-
-  const weights =
-    Array(cols).fill(0);
-
-  let bias = 0;
-
-  const learningRate = 0.03;
-  const lambda = 0.002;
-  const epochs = 2500;
-  const n = Z.length;
-
-  for (
-    let epoch=0;
-    epoch<epochs;
-    epoch++
-  ) {
-    const gradW =
-      Array(cols).fill(0);
-
-    let gradB = 0;
-
-    for (let i=0;i<n;i++) {
-      let pred = bias;
-
-      for (let j=0;j<cols;j++) {
-        pred +=
-          weights[j]*Z[i][j];
-      }
-
-      const error =
-        pred-zy[i];
-
-      gradB += error;
-
-      for (let j=0;j<cols;j++) {
-        gradW[j] +=
-          error*Z[i][j];
-      }
-    }
-
-    gradB /= n;
-
-    for (let j=0;j<cols;j++) {
-      gradW[j] =
-        gradW[j]/n +
-        lambda*weights[j];
-
-      weights[j] -=
-        learningRate*gradW[j];
-    }
-
-    bias -=
-      learningRate*gradB;
-  }
-
-  return {
-    weights,
-    bias,
-    xMean,
-    xStd,
-    yMean,
-    yStd
-  };
+  const weights=solveLinearSystem(A,b);
+  return {weights,xMean,xStd,yMean,yStd};
 }
 
-
-function predictModel(model,x) {
-  let z =
-    model.bias;
-
-  for (let j=0;j<x.length;j++) {
-    const value =
-      (x[j]-model.xMean[j]) /
-      model.xStd[j];
-
-    z +=
-      model.weights[j]*value;
+function solveLinearSystem(A,b){
+  const n=b.length;
+  const M=A.map((r,i)=>[...r,b[i]]);
+  for(let col=0;col<n;col++){
+    let pivot=col;
+    for(let r=col+1;r<n;r++) if(Math.abs(M[r][col])>Math.abs(M[pivot][col])) pivot=r;
+    [M[col],M[pivot]]=[M[pivot],M[col]];
+    const div=M[col][col];
+    if(Math.abs(div)<1e-12) continue;
+    for(let j=col;j<=n;j++) M[col][j]/=div;
+    for(let r=0;r<n;r++){
+      if(r===col) continue;
+      const f=M[r][col];
+      for(let j=col;j<=n;j++) M[r][j]-=f*M[col][j];
+    }
   }
-
-  return (
-    model.yMean +
-    z*model.yStd
-  );
+  return M.map(r=>r[n]);
 }
 
-
-function mae(actual,predicted) {
-  let sum = 0;
-
-  for (
-    let i=0;
-    i<actual.length;
-    i++
-  ) {
-    sum +=
-      Math.abs(
-        actual[i]-predicted[i]
-      );
-  }
-
-  return sum/actual.length;
+function predictModel(model,x){
+  let z=0;
+  for(let j=0;j<x.length;j++) z+=model.weights[j]*((x[j]-model.xMean[j])/model.xStd[j]);
+  return model.yMean+model.yStd*z;
 }
 
+function getContributions(model,x){
+  return x.map((v,j)=>{
+    const z=(v-model.xMean[j])/model.xStd[j];
+    const c=model.yStd*model.weights[j]*z;
+    return {name:FEATURE_NAMES[j],value:v,contribution:c};
+  }).sort((a,b)=>Math.abs(b.contribution)-Math.abs(a.contribution));
+}
 
-function drawChart(actual,predicted) {
-  const canvas =
-    $("chart");
+function renderDataSummary(rows){
+  const first=rows[0],last=rows[rows.length-1];
+  $("rowsKpi").textContent=rows.length.toLocaleString();
+  $("daysKpi").textContent=countDays(rows)+"日";
+  $("periodKpi").textContent=formatDateTime(first.ts)+" ～ "+formatDateTime(last.ts);
+  $("latestKpi").textContent=formatDateTime(last.ts);
+  $("latestTempKpi").textContent=last.temperature.toFixed(1)+" ℃";
+  $("stationKpi").textContent=[...new Set(rows.map(r=>r.station))].join(", ");
+}
 
-  const ctx =
-    canvas.getContext("2d");
+function renderMetrics(){
+  const body=$("metricsBody");
+  body.innerHTML="";
+  for(const h of HORIZONS){
+    const r=modelResults.get(h.steps);
+    const tr=document.createElement("tr");
+    if(!r?.ok){
+      tr.innerHTML=`<td>${h.label}</td><td colspan="7">${escapeHtml(r?.error||"不可")}</td>`;
+    }else{
+      const verdict=r.modelMae<r.baseMae?"AI優位":"単純予報優位";
+      const cls=r.modelMae<r.baseMae?"goodText":"badText";
+      tr.innerHTML=
+        `<td>${h.label}</td>`+
+        `<td>${r.forecast.toFixed(1)} ℃</td>`+
+        `<td>${r.modelMae.toFixed(3)} ℃</td>`+
+        `<td>${r.baseMae.toFixed(3)} ℃</td>`+
+        `<td class="${cls}">${r.improvement.toFixed(1)} %</td>`+
+        `<td>${r.trainCount}</td><td>${r.testCount}</td>`+
+        `<td class="${cls}">${verdict}</td>`;
+    }
+    body.appendChild(tr);
+  }
+}
 
-  const w =
-    canvas.width;
+function renderForecastCards(){
+  const grid=$("forecastGrid");
+  grid.innerHTML="";
+  const latest=globalRows[globalRows.length-1];
+  for(const h of HORIZONS){
+    const r=modelResults.get(h.steps);
+    const card=document.createElement("div");
+    card.className="forecast-card";
+    if(!r?.ok){
+      card.innerHTML=`<div class="h">${h.label}後</div><div class="temp">-</div><div class="sub">${escapeHtml(r?.error||"不可")}</div>`;
+    }else{
+      const target=latest.ts+h.minutes*60000;
+      const cls=r.modelMae<r.baseMae?"goodText":"badText";
+      card.innerHTML=
+        `<div class="h">${h.label}後 / ${formatShort(target)}</div>`+
+        `<div class="temp">${r.forecast.toFixed(1)} ℃</div>`+
+        `<div class="sub ${cls}">AI MAE ${r.modelMae.toFixed(2)}℃ / 単純 ${r.baseMae.toFixed(2)}℃</div>`;
+    }
+    grid.appendChild(card);
+  }
+}
 
-  const h =
-    canvas.height;
+function drawForecastChart(){
+  const latest=globalRows[globalRows.length-1];
+  const points=[{x:latest.ts,y:latest.temperature,kind:"current"}];
+  const base=[{x:latest.ts,y:latest.temperature}];
+  for(const h of HORIZONS){
+    const r=modelResults.get(h.steps);
+    if(r?.ok){
+      points.push({x:latest.ts+h.minutes*60000,y:r.forecast});
+      base.push({x:latest.ts+h.minutes*60000,y:latest.temperature});
+    }
+  }
+  drawTimeChart($("forecastChart"),[
+    {label:"AI予測",points,color:"#6ea8fe",width:3},
+    {label:"単純",points:base,color:"#9ca8ba",width:2,dash:[7,5]}
+  ],{current:{x:latest.ts,y:latest.temperature}});
+}
 
-  ctx.clearRect(0,0,w,h);
+function renderSelectedBacktest(){
+  const steps=Number($("backtestHorizon").value);
+  const h=HORIZONS.find(x=>x.steps===steps);
+  const r=modelResults.get(steps);
+  if(!r?.ok){
+    clearCanvas($("backtestChart"));
+    $("backtestTitle").textContent=(h?.label||"")+"：検証データなし";
+    return;
+  }
+  const max=240,start=Math.max(0,r.testActual.length-max);
+  const times=r.testTimes.slice(start);
+  const mk=arr=>arr.slice(start).map((y,i)=>({x:times[i],y}));
+  drawTimeChart($("backtestChart"),[
+    {label:"実測",points:mk(r.testActual),color:"#eef4ff",width:2.5},
+    {label:"AI",points:mk(r.testPred),color:"#6ea8fe",width:2.2},
+    {label:"単純",points:mk(r.testBase),color:"#9ca8ba",width:1.8,dash:[5,5]}
+  ]);
+  $("backtestTitle").textContent=
+    `${h.label}後：AI MAE ${r.modelMae.toFixed(3)}℃ / 単純 ${r.baseMae.toFixed(3)}℃ / テスト ${r.testCount}件`;
+}
 
-  if (!actual.length) return;
+function renderExplanation(){
+  const steps=Number($("explainHorizon").value);
+  const h=HORIZONS.find(x=>x.steps===steps);
+  const r=modelResults.get(steps);
+  if(!r?.ok){
+    $("formula").textContent="この時間先はまだモデルを作れません。";
+    $("contribBody").innerHTML="";
+    return;
+  }
+  const base=r.model.yMean;
+  const sum=r.contributions.reduce((s,x)=>s+x.contribution,0);
+  $("formula").innerHTML=
+    `<b>${h.label}後 ${r.forecast.toFixed(2)}℃</b><br>`+
+    `学習データの平均気温 <code>${base.toFixed(2)}℃</code>`+
+    ` ＋ 入力要素の合計寄与 <code>${sum>=0?"+":""}${sum.toFixed(2)}℃</code>`+
+    ` ＝ <code>${r.forecast.toFixed(2)}℃</code><br>`+
+    `<span class="small">各寄与は「今の値が、このモデルの学習平均からどれだけ離れているか × 学習係数」で算出。</span>`;
 
-  const maxPoints = 180;
+  $("contribBody").innerHTML=r.contributions.map(c=>
+    `<tr><td>${escapeHtml(c.name)}</td><td>${formatFeature(c.value)}</td>`+
+    `<td class="${c.contribution>=0?"goodText":"badText"}">${c.contribution>=0?"+":""}${c.contribution.toFixed(3)} ℃</td></tr>`
+  ).join("");
+}
 
-  const start =
-    Math.max(
-      0,
-      actual.length-maxPoints
-    );
+function drawTimeChart(canvas,series,extra={}){
+  const ctx=canvas.getContext("2d"),W=canvas.width,H=canvas.height,p={l:58,r:20,t:24,b:42};
+  ctx.clearRect(0,0,W,H);
+  const pts=series.flatMap(s=>s.points);
+  if(!pts.length)return;
+  const minX=Math.min(...pts.map(p=>p.x)),maxX=Math.max(...pts.map(p=>p.x));
+  let minY=Math.min(...pts.map(p=>p.y)),maxY=Math.max(...pts.map(p=>p.y));
+  if(minY===maxY){minY-=1;maxY+=1}
+  const padY=(maxY-minY)*.12;minY-=padY;maxY+=padY;
+  const X=x=>p.l+(x-minX)/(maxX-minX||1)*(W-p.l-p.r);
+  const Y=y=>H-p.b-(y-minY)/(maxY-minY)*(H-p.t-p.b);
 
-  const a =
-    actual.slice(start);
-
-  const p =
-    predicted.slice(start);
-
-  const all =
-    [...a,...p];
-
-  const min =
-    Math.min(...all);
-
-  const max =
-    Math.max(...all);
-
-  const pad = 45;
-
-  ctx.strokeStyle = "#bbb";
-  ctx.lineWidth = 1;
-
-  for (let i=0;i<=5;i++) {
-    const y =
-      pad +
-      (h-pad*2)*i/5;
-
+  ctx.font="12px system-ui";ctx.fillStyle="#9fb0ca";ctx.strokeStyle="#263652";ctx.lineWidth=1;
+  for(let i=0;i<=5;i++){
+    const y=minY+(maxY-minY)*i/5,py=Y(y);
+    ctx.beginPath();ctx.moveTo(p.l,py);ctx.lineTo(W-p.r,py);ctx.stroke();
+    ctx.fillText(y.toFixed(1)+"℃",4,py+4);
+  }
+  for(let i=0;i<=5;i++){
+    const x=minX+(maxX-minX)*i/5,px=X(x);
+    ctx.fillText(formatShort(x),Math.max(p.l,Math.min(px-28,W-78)),H-14);
+  }
+  for(const s of series){
+    ctx.strokeStyle=s.color;ctx.lineWidth=s.width||2;ctx.setLineDash(s.dash||[]);
     ctx.beginPath();
-    ctx.moveTo(pad,y);
-    ctx.lineTo(w-pad,y);
-    ctx.stroke();
+    s.points.forEach((pt,i)=>{const x=X(pt.x),y=Y(pt.y);i?ctx.lineTo(x,y):ctx.moveTo(x,y)});
+    ctx.stroke();ctx.setLineDash([]);
   }
-
-  function px(i) {
-    return (
-      a.length===1
-        ? w/2
-        : pad +
-          (w-pad*2) *
-          i/(a.length-1)
-    );
+  if(extra.current){
+    ctx.fillStyle="#2fc47e";ctx.beginPath();ctx.arc(X(extra.current.x),Y(extra.current.y),5,0,Math.PI*2);ctx.fill();
   }
-
-  function py(v) {
-    if (max===min) {
-      return h/2;
-    }
-
-    return (
-      h-pad -
-      (v-min)/(max-min) *
-      (h-pad*2)
-    );
-  }
-
-  ctx.lineWidth = 2;
-
-  ctx.strokeStyle = "#111";
-  ctx.beginPath();
-
-  a.forEach((v,i)=>{
-    const x=px(i);
-    const y=py(v);
-
-    if(i===0) ctx.moveTo(x,y);
-    else ctx.lineTo(x,y);
-  });
-
-  ctx.stroke();
-
-  ctx.strokeStyle = "#777";
-  ctx.setLineDash([6,4]);
-  ctx.beginPath();
-
-  p.forEach((v,i)=>{
-    const x=px(i);
-    const y=py(v);
-
-    if(i===0) ctx.moveTo(x,y);
-    else ctx.lineTo(x,y);
-  });
-
-  ctx.stroke();
-  ctx.setLineDash([]);
-
-  ctx.fillStyle="#111";
-  ctx.font="14px sans-serif";
-
-  ctx.fillText(
-    "実測（実線） / 予測（破線）",
-    pad,
-    22
-  );
-
-  ctx.fillText(
-    `${min.toFixed(1)}℃`,
-    4,
-    h-pad+4
-  );
-
-  ctx.fillText(
-    `${max.toFixed(1)}℃`,
-    4,
-    pad+4
-  );
 }
 
-
-function safeFileName(text) {
-  return text
-    .replace(
-      /[\\/:*?"<>|]/g,
-      "_"
-    )
-    .replace(
-      /\s+/g,
-      "_"
-    );
+function clearCanvas(c){c.getContext("2d").clearRect(0,0,c.width,c.height)}
+function groupByStation(rows){const m=new Map();for(const r of rows){if(!m.has(r.station))m.set(r.station,[]);m.get(r.station).push(r)}return m}
+function deduplicateRows(rows){const m=new Map();for(const r of rows)m.set(r.station+"|"+r.ts,r);return [...m.values()]}
+function countDays(rows){return new Set(rows.map(r=>r.station+"|"+r.date)).size}
+function mae(a,b){return a.reduce((s,v,i)=>s+Math.abs(v-b[i]),0)/a.length}
+function parseDateTime(date,time){
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(date))return NaN;
+  if(time==="24:00")return new Date(date+"T00:00:00").getTime()+86400000;
+  if(!/^\d{2}:\d{2}$/.test(time))return NaN;
+  return new Date(date+"T"+time+":00").getTime();
 }
-
-
-function normalizeNewlines(text) {
-  return text
-    .replace(/\r\n/g,"\n")
-    .replace(/\r/g,"\n");
-}
-
-
-function download(
-  filename,
-  text,
-  type
-) {
-  const blob =
-    new Blob(
-      ["\uFEFF",text],
-      {type}
-    );
-
-  const url =
-    URL.createObjectURL(blob);
-
-  const a =
-    document.createElement("a");
-
-  a.href=url;
-  a.download=filename;
-
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-
-  URL.revokeObjectURL(url);
-}
+function toNumber(v){if(v==null||v===""||v==="--")return NaN;const n=Number(v);return Number.isFinite(n)?n:NaN}
+function normalizeNewlines(t){return t.replace(/\r\n/g,"\n").replace(/\r/g,"\n")}
+function safeFileName(t){return t.replace(/[\\/:*?"<>|]/g,"_").replace(/\s+/g,"_")}
+function formatDateTime(ts){const d=new Date(ts);return `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,"0")}/${String(d.getDate()).padStart(2,"0")} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`}
+function formatShort(ts){const d=new Date(ts);return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`}
+function formatFeature(v){return Math.abs(v)>=100?v.toFixed(1):v.toFixed(3)}
+function formatBytes(n){return n<1024?n+" B":n<1048576?(n/1024).toFixed(1)+" KB":(n/1048576).toFixed(1)+" MB"}
+function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
+function nextFrame(){return new Promise(r=>requestAnimationFrame(()=>r()))}
+function download(name,text,type){const blob=new Blob(["\uFEFF",text],{type}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url)}
 </script>
+</body>
+</html>
+
 
 </body>
 </html>
