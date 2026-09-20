@@ -2,208 +2,300 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>気象データ変換</title>
-
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>気象データ変換・予測</title>
 <style>
-body {
-  font-family: system-ui, sans-serif;
-  max-width: 900px;
-  margin: 24px auto;
-  padding: 0 14px;
-}
-
-input, button, textarea {
-  font: inherit;
-}
-
-input {
-  padding: 8px;
-  margin: 4px 8px 12px 0;
-}
-
-button {
-  padding: 10px 16px;
-  margin: 4px 8px 8px 0;
-  cursor: pointer;
-}
-
-textarea {
-  width: 100%;
-  height: 420px;
-  box-sizing: border-box;
-  font-family: monospace;
-  white-space: pre;
-}
-
-#status {
-  margin: 12px 0;
-  font-weight: 700;
-  white-space: pre-wrap;
-}
+body{font-family:system-ui,-apple-system,sans-serif;max-width:1100px;margin:24px auto;padding:0 14px;line-height:1.55}
+h1,h2{margin-bottom:8px}
+input,button,textarea{font:inherit}
+input{padding:8px;margin:4px 8px 8px 0}
+button{padding:10px 16px;margin:6px 8px 6px 0;cursor:pointer}
+textarea{width:100%;height:340px;box-sizing:border-box;font-family:monospace;white-space:pre}
+#status{white-space:pre-wrap;background:#f3f3f3;padding:12px;margin:14px 0}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;margin:14px 0}
+.card{border:1px solid #ccc;border-radius:8px;padding:12px}
+.big{font-size:1.45rem;font-weight:700}
+canvas{width:100%;height:360px;border:1px solid #ccc;border-radius:8px;margin-top:12px}
+.row{display:flex;gap:14px;flex-wrap:wrap}
+.small{font-size:.9rem}
 </style>
 </head>
-
 <body>
 
-<h1>気象データ変換</h1>
+<h1>気象データ変換・60分後気温予測</h1>
 
-<label>
-日付
-<input id="date" type="date">
-</label>
+<h2>1. 今日の生データ</h2>
 
-<label>
-地点
-<input id="station" type="text" placeholder="大阪">
-</label>
+<div class="row">
+  <label>
+    日付<br>
+    <input id="date" type="date">
+  </label>
+
+  <label>
+    地点<br>
+    <input id="station" type="text" placeholder="大阪">
+  </label>
+</div>
+
+<textarea id="raw" placeholder="ここに10分値の表をそのまま貼り付け"></textarea>
 
 <div>
-  <button id="readClipboard">クリップボードから取り込む</button>
-  <button id="saveTxt">TXT保存</button>
-  <button id="saveTsv">TSV保存</button>
+  <button id="convert">生データをTSV化</button>
+  <button id="downloadCurrent">今日のTSVを保存</button>
 </div>
 
-<div id="status">
-表をコピーして「クリップボードから取り込む」を押してください。
+<h2>2. 過去のTSV</h2>
+
+<input id="historyFiles" type="file" accept=".tsv,.txt" multiple>
+
+<p class="small">
+過去のTSVをまとめて選択してください。今日の生データは上でTSV化した内容を自動的に結合します。
+</p>
+
+<div>
+  <button id="predict">過去TSV＋今日のデータで学習・予測</button>
 </div>
 
-<textarea id="preview" placeholder="取り込んだデータがここに表示されます"></textarea>
+<div id="status">生データを貼り付けるか、過去TSVを選択してください。</div>
+
+<div class="cards">
+  <div class="card">
+    <div>過去TSV</div>
+    <div id="fileCount" class="big">-</div>
+  </div>
+  <div class="card">
+    <div>全観測行</div>
+    <div id="rowCount" class="big">-</div>
+  </div>
+  <div class="card">
+    <div>学習サンプル</div>
+    <div id="sampleCount" class="big">-</div>
+  </div>
+  <div class="card">
+    <div>AI MAE</div>
+    <div id="modelMae" class="big">-</div>
+  </div>
+  <div class="card">
+    <div>単純予報 MAE</div>
+    <div id="baseMae" class="big">-</div>
+  </div>
+  <div class="card">
+    <div>60分後予測</div>
+    <div id="futureTemp" class="big">-</div>
+  </div>
+</div>
+
+<canvas id="chart" width="1000" height="360"></canvas>
 
 <script>
 const $ = id => document.getElementById(id);
 
-const dateBox = $("date");
-const stationBox = $("station");
-const preview = $("preview");
-const statusBox = $("status");
+let currentRows = [];
+let currentTsv = "";
 
-const now = new Date();
-const yyyy = now.getFullYear();
-const mm = String(now.getMonth() + 1).padStart(2, "0");
-const dd = String(now.getDate()).padStart(2, "0");
-dateBox.value = `${yyyy}-${mm}-${dd}`;
+setToday();
 
-$("readClipboard").addEventListener("click", async () => {
+$("convert").addEventListener("click", () => {
   try {
-    const text = await navigator.clipboard.readText();
+    const date = $("date").value.trim();
+    const station = $("station").value.trim();
+    const raw = $("raw").value;
 
-    if (!text.trim()) {
-      throw new Error("クリップボードが空です。");
-    }
+    if (!date) throw new Error("日付を入力してください。");
+    if (!station) throw new Error("地点を入力してください。");
+    if (!raw.trim()) throw new Error("生データを貼り付けてください。");
 
-    preview.value = text;
-    showStatus("クリップボードから取り込みました。");
-  } catch (error) {
-    showStatus(
-      "クリップボードを読み取れませんでした。\n" +
-      "GitHub PagesなどHTTPS上で開き、ブラウザの許可を与えてください。\n\n" +
-      error.message
-    );
+    const parsed = parseRawWeather(raw, date, station);
+
+    currentRows = parsed.rows;
+    currentTsv = parsed.tsv;
+
+    $("status").textContent =
+      `TSV化完了\n${currentRows.length}行を認識しました。`;
+
+  } catch (e) {
+    $("status").textContent = "エラー\n" + e.message;
   }
 });
 
-$("saveTxt").addEventListener("click", () => {
+
+$("downloadCurrent").addEventListener("click", () => {
   try {
-    const { date, station, raw } = getInput();
-
-    const filename =
-      `${date}_${safeFileName(station)}.txt`;
-
-    download(
-      filename,
-      normalizeNewlines(raw),
-      "text/plain;charset=utf-8"
-    );
-
-    showStatus(`TXT保存：${filename}`);
-  } catch (error) {
-    showStatus(error.message);
-  }
-});
-
-$("saveTsv").addEventListener("click", () => {
-  try {
-    const { date, station, raw } = getInput();
-    const rows = parseWeather(raw);
-
-    if (rows.length === 0) {
-      throw new Error("観測行を認識できませんでした。");
+    if (!currentTsv) {
+      $("convert").click();
     }
 
-    const header = [
-      "date",
-      "station",
-      "time",
-      "pressure_local_hpa",
-      "pressure_sea_hpa",
-      "precip_mm",
-      "temperature_c",
-      "humidity_pct",
-      "wind_speed_ms",
-      "wind_direction",
-      "gust_speed_ms",
-      "gust_direction",
-      "sunshine_min"
-    ];
+    if (!currentTsv) {
+      return;
+    }
 
-    const output = [
-      header.join("\t"),
-      ...rows.map(row =>
-        [date, station, ...row].join("\t")
-      )
-    ].join("\n") + "\n";
+    const date = $("date").value.trim();
+    const station = $("station").value.trim();
 
     const filename =
       `${date}_${safeFileName(station)}.tsv`;
 
     download(
       filename,
-      output,
+      currentTsv,
       "text/tab-separated-values;charset=utf-8"
     );
 
-    showStatus(
-      `TSV保存：${filename}\n${rows.length}行`
-    );
-  } catch (error) {
-    showStatus(error.message);
+    $("status").textContent =
+      `保存しました\n${filename}`;
+
+  } catch (e) {
+    $("status").textContent = "エラー\n" + e.message;
   }
 });
 
-function getInput() {
-  const date = dateBox.value.trim();
-  const station = stationBox.value.trim();
-  const raw = preview.value;
 
-  if (!date) {
-    throw new Error("日付を入力してください。");
+$("predict").addEventListener("click", async () => {
+  try {
+    $("status").textContent = "読み込み・学習中...";
+
+    const historyFiles = [...$("historyFiles").files];
+    const allRows = [];
+
+    for (const file of historyFiles) {
+      const text = await file.text();
+      allRows.push(...parseTsvRows(text));
+    }
+
+    if ($("raw").value.trim()) {
+      const date = $("date").value.trim();
+      const station = $("station").value.trim();
+
+      const parsed = parseRawWeather(
+        $("raw").value,
+        date,
+        station
+      );
+
+      currentRows = parsed.rows;
+      currentTsv = parsed.tsv;
+
+      allRows.push(...currentRows);
+    }
+
+    const rows = deduplicateRows(allRows);
+
+    rows.sort((a,b) => a.ts - b.ts);
+
+    if (rows.length < 50) {
+      throw new Error(
+        "観測データが少なすぎます。過去TSVを追加してください。"
+      );
+    }
+
+    const samples = buildSamples(rows);
+
+    if (samples.length < 100) {
+      throw new Error(
+        "60分先の教師データが少なすぎます。\n" +
+        "さらに過去TSVを追加してください。"
+      );
+    }
+
+    const split = Math.floor(samples.length * 0.8);
+
+    const train = samples.slice(0, split);
+    const test = samples.slice(split);
+
+    if (train.length < 50 || test.length < 20) {
+      throw new Error("学習用またはテスト用データが不足しています。");
+    }
+
+    const model = trainRidgeRegression(train);
+
+    const predictions =
+      test.map(s => predictModel(model, s.x));
+
+    const actual =
+      test.map(s => s.y);
+
+    const baseline =
+      test.map(s => s.currentTemp);
+
+    const modelMae =
+      mae(actual, predictions);
+
+    const baseMae =
+      mae(actual, baseline);
+
+    const latestFeature =
+      buildLatestFeature(rows);
+
+    let futureText = "算出不可";
+
+    if (latestFeature) {
+      const predicted =
+        predictModel(model, latestFeature.x);
+
+      futureText =
+        predicted.toFixed(1) + " ℃";
+    }
+
+    $("fileCount").textContent =
+      historyFiles.length;
+
+    $("rowCount").textContent =
+      rows.length.toLocaleString();
+
+    $("sampleCount").textContent =
+      samples.length.toLocaleString();
+
+    $("modelMae").textContent =
+      modelMae.toFixed(3) + " ℃";
+
+    $("baseMae").textContent =
+      baseMae.toFixed(3) + " ℃";
+
+    $("futureTemp").textContent =
+      futureText;
+
+    const improvement =
+      baseMae > 0
+        ? (baseMae - modelMae) / baseMae * 100
+        : 0;
+
+    $("status").textContent =
+      "予測完了\n" +
+      `AI MAE: ${modelMae.toFixed(3)} ℃\n` +
+      `単純予報 MAE: ${baseMae.toFixed(3)} ℃\n` +
+      `改善率: ${improvement.toFixed(1)} %`;
+
+    drawChart(actual, predictions);
+
+  } catch (e) {
+    $("status").textContent =
+      "エラー\n" + e.message;
   }
+});
 
-  if (!station) {
-    throw new Error("地点を入力してください。");
-  }
 
-  if (!raw.trim()) {
-    throw new Error("データがありません。");
-  }
+function setToday() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth()+1).padStart(2,"0");
+  const day = String(d.getDate()).padStart(2,"0");
 
-  return { date, station, raw };
+  $("date").value = `${y}-${m}-${day}`;
 }
 
-function parseWeather(text) {
-  const rows = [];
-  const lines = normalizeNewlines(text).split("\n");
 
+function parseRawWeather(raw, date, station) {
+  const lines = normalizeNewlines(raw).split("\n");
   const timePattern =
     /^(?:[01]\d|2[0-3]):[0-5]\d$|^24:00$/;
+
+  const sourceRows = [];
 
   for (const originalLine of lines) {
     const line = originalLine.trim();
 
-    if (!line) {
-      continue;
-    }
+    if (!line) continue;
 
     const parts = line.split(/\s+/);
 
@@ -224,35 +316,763 @@ function parseWeather(text) {
       );
     }
 
-    rows.push(parts);
+    sourceRows.push(parts);
+  }
+
+  if (!sourceRows.length) {
+    throw new Error("観測行を認識できませんでした。");
+  }
+
+  const header = [
+    "date",
+    "station",
+    "time",
+    "pressure_local_hpa",
+    "pressure_sea_hpa",
+    "precip_mm",
+    "temperature_c",
+    "humidity_pct",
+    "wind_speed_ms",
+    "wind_direction",
+    "gust_speed_ms",
+    "gust_direction",
+    "sunshine_min"
+  ];
+
+  const tsv = [
+    header.join("\t"),
+    ...sourceRows.map(row =>
+      [date, station, ...row].join("\t")
+    )
+  ].join("\n") + "\n";
+
+  const rows = sourceRows
+    .map(row => rawRowToObject(date, station, row))
+    .filter(Boolean);
+
+  return { tsv, rows };
+}
+
+
+function rawRowToObject(date, station, row) {
+  const ts = parseDateTime(date, row[0]);
+
+  const temperature = toNumber(row[4]);
+  const humidity = toNumber(row[5]);
+  const pressure = toNumber(row[2]);
+  const wind = toNumber(row[6]);
+  const sunshine = toNumber(row[10]);
+
+  if (
+    !Number.isFinite(ts) ||
+    !Number.isFinite(temperature) ||
+    !Number.isFinite(humidity) ||
+    !Number.isFinite(pressure) ||
+    !Number.isFinite(wind)
+  ) {
+    return null;
+  }
+
+  return {
+    ts,
+    date,
+    time: row[0],
+    station,
+    temperature,
+    humidity,
+    pressure,
+    wind,
+    sunshine: Number.isFinite(sunshine) ? sunshine : 0
+  };
+}
+
+
+function parseTsvRows(text) {
+  const lines = normalizeNewlines(text)
+    .split("\n")
+    .filter(line => line.trim() !== "");
+
+  if (lines.length < 2) {
+    return [];
+  }
+
+  const header = lines[0].split("\t");
+
+  const required = [
+    "date",
+    "station",
+    "time",
+    "pressure_sea_hpa",
+    "temperature_c",
+    "humidity_pct",
+    "wind_speed_ms",
+    "sunshine_min"
+  ];
+
+  for (const name of required) {
+    if (!header.includes(name)) {
+      throw new Error(
+        "TSVに必要な列がありません: " + name
+      );
+    }
+  }
+
+  const idx =
+    Object.fromEntries(
+      header.map((name,i) => [name,i])
+    );
+
+  const rows = [];
+
+  for (const line of lines.slice(1)) {
+    const v = line.split("\t");
+
+    const date = v[idx.date] ?? "";
+    const time = v[idx.time] ?? "";
+    const station = v[idx.station] ?? "";
+
+    const ts =
+      parseDateTime(date, time);
+
+    const temperature =
+      toNumber(v[idx.temperature_c]);
+
+    const humidity =
+      toNumber(v[idx.humidity_pct]);
+
+    const pressure =
+      toNumber(v[idx.pressure_sea_hpa]);
+
+    const wind =
+      toNumber(v[idx.wind_speed_ms]);
+
+    const sunshine =
+      toNumber(v[idx.sunshine_min]);
+
+    if (
+      !Number.isFinite(ts) ||
+      !Number.isFinite(temperature) ||
+      !Number.isFinite(humidity) ||
+      !Number.isFinite(pressure) ||
+      !Number.isFinite(wind)
+    ) {
+      continue;
+    }
+
+    rows.push({
+      ts,
+      date,
+      time,
+      station,
+      temperature,
+      humidity,
+      pressure,
+      wind,
+      sunshine:
+        Number.isFinite(sunshine)
+          ? sunshine
+          : 0
+    });
   }
 
   return rows;
 }
 
-function normalizeNewlines(text) {
-  return text
-    .replace(/\r\n/g, "\n")
-    .replace(/\r/g, "\n");
+
+function parseDateTime(date, time) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return NaN;
+  }
+
+  if (time === "24:00") {
+    return (
+      new Date(date + "T00:00:00").getTime() +
+      24 * 60 * 60 * 1000
+    );
+  }
+
+  if (!/^\d{2}:\d{2}$/.test(time)) {
+    return NaN;
+  }
+
+  return new Date(
+    date + "T" + time + ":00"
+  ).getTime();
 }
+
+
+function toNumber(value) {
+  if (
+    value === undefined ||
+    value === null ||
+    value === "" ||
+    value === "--"
+  ) {
+    return NaN;
+  }
+
+  const n = Number(value);
+
+  return Number.isFinite(n)
+    ? n
+    : NaN;
+}
+
+
+function deduplicateRows(rows) {
+  const map = new Map();
+
+  for (const row of rows) {
+    const key =
+      row.station + "|" + row.ts;
+
+    map.set(key, row);
+  }
+
+  return [...map.values()];
+}
+
+
+function buildSamples(rows) {
+  const byStation =
+    groupByStation(rows);
+
+  const samples = [];
+
+  for (const stationRows of byStation.values()) {
+    stationRows.sort((a,b) => a.ts-b.ts);
+
+    const map =
+      new Map(
+        stationRows.map(r => [r.ts,r])
+      );
+
+    for (const current of stationRows) {
+      const lag10 =
+        map.get(current.ts - 10*60*1000);
+
+      const lag30 =
+        map.get(current.ts - 30*60*1000);
+
+      const lag60 =
+        map.get(current.ts - 60*60*1000);
+
+      const target =
+        map.get(current.ts + 60*60*1000);
+
+      if (
+        !lag10 ||
+        !lag30 ||
+        !lag60 ||
+        !target
+      ) {
+        continue;
+      }
+
+      const x =
+        makeFeatureVector(
+          current,
+          lag10,
+          lag30,
+          lag60
+        );
+
+      if (
+        x.some(v => !Number.isFinite(v))
+      ) {
+        continue;
+      }
+
+      samples.push({
+        x,
+        y: target.temperature,
+        currentTemp: current.temperature,
+        ts: current.ts
+      });
+    }
+  }
+
+  samples.sort((a,b) => a.ts-b.ts);
+
+  return samples;
+}
+
+
+function buildLatestFeature(rows) {
+  const byStation =
+    groupByStation(rows);
+
+  let best = null;
+
+  for (const stationRows of byStation.values()) {
+    stationRows.sort((a,b) => a.ts-b.ts);
+
+    const map =
+      new Map(
+        stationRows.map(r => [r.ts,r])
+      );
+
+    for (
+      let i = stationRows.length-1;
+      i >= 0;
+      i--
+    ) {
+      const current = stationRows[i];
+
+      const lag10 =
+        map.get(current.ts - 10*60*1000);
+
+      const lag30 =
+        map.get(current.ts - 30*60*1000);
+
+      const lag60 =
+        map.get(current.ts - 60*60*1000);
+
+      if (
+        !lag10 ||
+        !lag30 ||
+        !lag60
+      ) {
+        continue;
+      }
+
+      const x =
+        makeFeatureVector(
+          current,
+          lag10,
+          lag30,
+          lag60
+        );
+
+      if (
+        x.some(v => !Number.isFinite(v))
+      ) {
+        continue;
+      }
+
+      if (
+        !best ||
+        current.ts > best.ts
+      ) {
+        best = {
+          ts: current.ts,
+          x
+        };
+      }
+
+      break;
+    }
+  }
+
+  return best;
+}
+
+
+function groupByStation(rows) {
+  const map = new Map();
+
+  for (const row of rows) {
+    if (!map.has(row.station)) {
+      map.set(row.station, []);
+    }
+
+    map.get(row.station).push(row);
+  }
+
+  return map;
+}
+
+
+function makeFeatureVector(
+  current,
+  lag10,
+  lag30,
+  lag60
+) {
+  const d =
+    new Date(current.ts);
+
+  const hour =
+    d.getHours() +
+    d.getMinutes()/60;
+
+  const angle =
+    2*Math.PI*hour/24;
+
+  return [
+    current.temperature,
+    current.humidity,
+    current.pressure,
+    current.wind,
+    current.sunshine,
+
+    current.temperature-lag10.temperature,
+    current.temperature-lag30.temperature,
+    current.temperature-lag60.temperature,
+
+    current.pressure-lag30.pressure,
+    current.pressure-lag60.pressure,
+
+    current.humidity-lag30.humidity,
+    current.humidity-lag60.humidity,
+
+    current.wind-lag30.wind,
+    current.wind-lag60.wind,
+
+    Math.sin(angle),
+    Math.cos(angle)
+  ];
+}
+
+
+function trainRidgeRegression(samples) {
+  const X =
+    samples.map(s => s.x);
+
+  const y =
+    samples.map(s => s.y);
+
+  const cols =
+    X[0].length;
+
+  const xMean =
+    Array(cols).fill(0);
+
+  const xStd =
+    Array(cols).fill(0);
+
+  for (const row of X) {
+    for (let j=0;j<cols;j++) {
+      xMean[j] += row[j];
+    }
+  }
+
+  for (let j=0;j<cols;j++) {
+    xMean[j] /= X.length;
+  }
+
+  for (const row of X) {
+    for (let j=0;j<cols;j++) {
+      const d =
+        row[j]-xMean[j];
+
+      xStd[j] += d*d;
+    }
+  }
+
+  for (let j=0;j<cols;j++) {
+    xStd[j] =
+      Math.sqrt(
+        xStd[j]/X.length
+      );
+
+    if (xStd[j] < 1e-9) {
+      xStd[j] = 1;
+    }
+  }
+
+  const yMean =
+    y.reduce((a,b)=>a+b,0)/y.length;
+
+  let yStd =
+    Math.sqrt(
+      y.reduce(
+        (sum,v)=>
+          sum+(v-yMean)**2,
+        0
+      )/y.length
+    );
+
+  if (yStd < 1e-9) {
+    yStd = 1;
+  }
+
+  const Z =
+    X.map(row =>
+      row.map(
+        (v,j)=>
+          (v-xMean[j])/xStd[j]
+      )
+    );
+
+  const zy =
+    y.map(
+      v => (v-yMean)/yStd
+    );
+
+  const weights =
+    Array(cols).fill(0);
+
+  let bias = 0;
+
+  const learningRate = 0.03;
+  const lambda = 0.002;
+  const epochs = 2500;
+  const n = Z.length;
+
+  for (
+    let epoch=0;
+    epoch<epochs;
+    epoch++
+  ) {
+    const gradW =
+      Array(cols).fill(0);
+
+    let gradB = 0;
+
+    for (let i=0;i<n;i++) {
+      let pred = bias;
+
+      for (let j=0;j<cols;j++) {
+        pred +=
+          weights[j]*Z[i][j];
+      }
+
+      const error =
+        pred-zy[i];
+
+      gradB += error;
+
+      for (let j=0;j<cols;j++) {
+        gradW[j] +=
+          error*Z[i][j];
+      }
+    }
+
+    gradB /= n;
+
+    for (let j=0;j<cols;j++) {
+      gradW[j] =
+        gradW[j]/n +
+        lambda*weights[j];
+
+      weights[j] -=
+        learningRate*gradW[j];
+    }
+
+    bias -=
+      learningRate*gradB;
+  }
+
+  return {
+    weights,
+    bias,
+    xMean,
+    xStd,
+    yMean,
+    yStd
+  };
+}
+
+
+function predictModel(model,x) {
+  let z =
+    model.bias;
+
+  for (let j=0;j<x.length;j++) {
+    const value =
+      (x[j]-model.xMean[j]) /
+      model.xStd[j];
+
+    z +=
+      model.weights[j]*value;
+  }
+
+  return (
+    model.yMean +
+    z*model.yStd
+  );
+}
+
+
+function mae(actual,predicted) {
+  let sum = 0;
+
+  for (
+    let i=0;
+    i<actual.length;
+    i++
+  ) {
+    sum +=
+      Math.abs(
+        actual[i]-predicted[i]
+      );
+  }
+
+  return sum/actual.length;
+}
+
+
+function drawChart(actual,predicted) {
+  const canvas =
+    $("chart");
+
+  const ctx =
+    canvas.getContext("2d");
+
+  const w =
+    canvas.width;
+
+  const h =
+    canvas.height;
+
+  ctx.clearRect(0,0,w,h);
+
+  if (!actual.length) return;
+
+  const maxPoints = 180;
+
+  const start =
+    Math.max(
+      0,
+      actual.length-maxPoints
+    );
+
+  const a =
+    actual.slice(start);
+
+  const p =
+    predicted.slice(start);
+
+  const all =
+    [...a,...p];
+
+  const min =
+    Math.min(...all);
+
+  const max =
+    Math.max(...all);
+
+  const pad = 45;
+
+  ctx.strokeStyle = "#bbb";
+  ctx.lineWidth = 1;
+
+  for (let i=0;i<=5;i++) {
+    const y =
+      pad +
+      (h-pad*2)*i/5;
+
+    ctx.beginPath();
+    ctx.moveTo(pad,y);
+    ctx.lineTo(w-pad,y);
+    ctx.stroke();
+  }
+
+  function px(i) {
+    return (
+      a.length===1
+        ? w/2
+        : pad +
+          (w-pad*2) *
+          i/(a.length-1)
+    );
+  }
+
+  function py(v) {
+    if (max===min) {
+      return h/2;
+    }
+
+    return (
+      h-pad -
+      (v-min)/(max-min) *
+      (h-pad*2)
+    );
+  }
+
+  ctx.lineWidth = 2;
+
+  ctx.strokeStyle = "#111";
+  ctx.beginPath();
+
+  a.forEach((v,i)=>{
+    const x=px(i);
+    const y=py(v);
+
+    if(i===0) ctx.moveTo(x,y);
+    else ctx.lineTo(x,y);
+  });
+
+  ctx.stroke();
+
+  ctx.strokeStyle = "#777";
+  ctx.setLineDash([6,4]);
+  ctx.beginPath();
+
+  p.forEach((v,i)=>{
+    const x=px(i);
+    const y=py(v);
+
+    if(i===0) ctx.moveTo(x,y);
+    else ctx.lineTo(x,y);
+  });
+
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.fillStyle="#111";
+  ctx.font="14px sans-serif";
+
+  ctx.fillText(
+    "実測（実線） / 予測（破線）",
+    pad,
+    22
+  );
+
+  ctx.fillText(
+    `${min.toFixed(1)}℃`,
+    4,
+    h-pad+4
+  );
+
+  ctx.fillText(
+    `${max.toFixed(1)}℃`,
+    4,
+    pad+4
+  );
+}
+
 
 function safeFileName(text) {
   return text
-    .replace(/[\\/:*?"<>|]/g, "_")
-    .replace(/\s+/g, "_");
+    .replace(
+      /[\\/:*?"<>|]/g,
+      "_"
+    )
+    .replace(
+      /\s+/g,
+      "_"
+    );
 }
 
-function download(filename, text, type) {
-  const blob = new Blob(
-    ["\uFEFF", text],
-    { type }
-  );
 
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
+function normalizeNewlines(text) {
+  return text
+    .replace(/\r\n/g,"\n")
+    .replace(/\r/g,"\n");
+}
 
-  a.href = url;
-  a.download = filename;
+
+function download(
+  filename,
+  text,
+  type
+) {
+  const blob =
+    new Blob(
+      ["\uFEFF",text],
+      {type}
+    );
+
+  const url =
+    URL.createObjectURL(blob);
+
+  const a =
+    document.createElement("a");
+
+  a.href=url;
+  a.download=filename;
 
   document.body.appendChild(a);
   a.click();
@@ -260,11 +1080,8 @@ function download(filename, text, type) {
 
   URL.revokeObjectURL(url);
 }
-
-function showStatus(message) {
-  statusBox.textContent = message;
-}
 </script>
 
 </body>
 </html>
+
