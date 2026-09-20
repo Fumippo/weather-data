@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Weather Forecast Lab</title>
+<title>Weather Forecast Lab v3</title>
 <style>
 :root{
   --bg:#0b1020;
@@ -138,10 +138,10 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
 <div class="wrap">
   <div class="hero">
     <div>
-      <h1>Weather Forecast Lab</h1>
-      <p>10分値をTSV化し、複数日のデータから多時間先を直接予測するブラウザ完結型ダッシュボード</p>
+      <h1>Weather Forecast Lab <span style="font-size:.38em;color:var(--muted)">v3</span></h1>
+      <p>10分値をTSV化し、現在気温からの変化量 ΔT を学習して多時間先を予測するブラウザ完結型ダッシュボード</p>
     </div>
-    <div class="badge">HTML + JavaScript / 外部ライブラリなし</div>
+    <div class="badge">v3 / ΔT補正 + 自動モデル選択 / 外部ライブラリなし</div>
   </div>
 
   <div class="grid">
@@ -238,8 +238,9 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
       <div id="forecastGrid" class="forecast-grid"></div>
       <div class="chart-wrap"><canvas id="forecastChart" width="1250" height="390"></canvas></div>
       <div class="legend">
-        <span><i class="dot" style="background:#6ea8fe"></i>AI予測</span>
+        <span><i class="dot" style="background:#6ea8fe"></i>AI予測（ΔT補正）</span>
         <span><i class="dot" style="background:#9ca8ba"></i>単純予報</span>
+        <span><i class="dot" style="background:#f7c65d"></i>採用予報</span>
         <span><i class="dot" style="background:#2fc47e"></i>現在実測</span>
       </div>
     </section>
@@ -261,8 +262,9 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
         <table>
           <thead>
             <tr>
-              <th>予測先</th><th>AI予測</th><th>AI MAE</th><th>単純MAE</th>
-              <th>改善率</th><th>学習数</th><th>テスト数</th><th>判定</th>
+              <th>予測先</th><th>AI予測</th><th>単純予報</th><th>採用予報</th>
+              <th>AI MAE</th><th>単純MAE</th><th>改善率</th>
+              <th>学習数</th><th>テスト数</th><th>採用方式</th>
             </tr>
           </thead>
           <tbody id="metricsBody"></tbody>
@@ -295,15 +297,18 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
       <section class="panel">
         <h2>モデルについて</h2>
         <div class="explain">
-          <b>予測方式：</b>時間ごとの直接リッジ回帰。<br>
-          10分後、1時間後、6時間後、24時間後を「同じモデルの繰り返し」ではなく、
-          それぞれ別モデルとして学習します。<br><br>
+          <b>予測方式：</b>時間ごとの「気温変化量 ΔT」直接リッジ回帰。<br>
+          未来気温そのものではなく、<b>未来気温 − 現在気温</b>を学習します。
+          10分後、30分後、1時間後、2時間後、3時間後、6時間後、12時間後、24時間後を別々に学習します。<br><br>
+          <b>最終計算：</b>現在気温 ＋ AIが予測したΔT ＝ AI未来気温。<br>
+          これにより短時間予報で学習平均へ無理に引っ張られる挙動を抑えます。<br><br>
           <b>主な入力：</b>現在の気温・湿度・海面気圧・風速・日照、
-          10分/30分/1時間/3時間/24時間の変化、時刻、季節周期。<br><br>
-          <b>検証：</b>古い80%で学習、新しい20%でテスト。
-          未来予測そのものは検証後に全利用可能データで再学習したモデルを使用します。<br><br>
-          <b>比較：</b>「未来も現在気温と同じ」とする単純予報と常に比較します。
-          AIが負けている時間帯は、そのことを赤字で表示します。
+          10分/30分/1時間/3時間/24時間の変化、時刻。季節周期は90日未満では無効です。<br><br>
+          <b>検証：</b>古い側で学習し、新しい側でテストします。
+          予測対象期間が学習側へ食い込まないよう、予測時間ぶんの境界を空けています。
+          実際の未来予測は、その後に全利用可能データで再学習します。<br><br>
+          <b>採用予報：</b>各予測時間について、過去検証MAEが小さい方を暫定採用します。
+          AIが単純予報に負けていれば現在気温固定、勝っていればAI予報を採用します。
         </div>
       </section>
     </div>
@@ -672,6 +677,7 @@ function trainForHorizon(rows,steps){
     return {ok:false,samples,error:"検証区間を作れません"};
   }
 
+  // 学習サンプルの「正解時刻」がテスト開始時刻へ食い込まないようにする。
   const train=samples.filter(s=>s.targetTs < testStartTs);
   const test=samples.filter(s=>s.ts >= testStartTs);
 
@@ -679,13 +685,19 @@ function trainForHorizon(rows,steps){
     return {ok:false,samples,error:"検証サンプル不足"};
   }
 
+  // 評価用ΔTモデル
   const evalModel=trainRidgeClosedForm(train,0.8);
-  const pred=test.map(s=>predictModel(evalModel,s.x));
-  const actual=test.map(s=>s.y);
+
+  // AI未来気温 = 現在気温 + AIが予測したΔT
+  const testDeltaPred=test.map(s=>predictModel(evalModel,s.x));
+  const pred=test.map((s,i)=>s.currentTemp+testDeltaPred[i]);
+
+  const actual=test.map(s=>s.targetTemp);
   const baseline=test.map(s=>s.currentTemp);
 
   const modelMae=mae(actual,pred);
   const baseMae=mae(actual,baseline);
+  const improvement=baseMae>0?(baseMae-modelMae)/baseMae*100:0;
 
   const latest=buildLatestFeature(rows);
 
@@ -701,9 +713,18 @@ function trainForHorizon(rows,steps){
     };
   }
 
+  // 本番予測は全教師データで再学習
   const finalModel=trainRidgeClosedForm(samples,0.8);
-  const forecast=predictModel(finalModel,latest.x);
+
+  const forecastDelta=predictModel(finalModel,latest.x);
+  const forecast=latest.currentTemp+forecastDelta;
+
   const contributions=getContributions(finalModel,latest.x);
+
+  // 過去検証でMAEが小さい方式を暫定採用
+  const useAI=modelMae<baseMae;
+  const adoptedForecast=useAI ? forecast : latest.currentTemp;
+  const adoptedMethod=useAI ? "AI（ΔT補正）" : "単純予報";
 
   return {
     ok:true,
@@ -711,17 +732,28 @@ function trainForHorizon(rows,steps){
     samples,
     trainCount:train.length,
     testCount:test.length,
+
     modelMae,
     baseMae,
-    improvement:baseMae>0?(baseMae-modelMae)/baseMae*100:0,
+    improvement,
+
     forecast,
+    forecastDelta,
+    baselineForecast:latest.currentTemp,
+    adoptedForecast,
+    adoptedMethod,
+    useAI,
+
     latestTs:latest.ts,
     latestTemp:latest.currentTemp,
     latestStation:latest.station,
+
     testActual:actual,
     testPred:pred,
+    testDeltaPred,
     testBase:baseline,
     testTimes:test.map(s=>s.targetTs),
+
     model:finalModel,
     latestX:latest.x,
     contributions
@@ -730,6 +762,7 @@ function trainForHorizon(rows,steps){
 
 function buildSamples(rows,steps){
   const groups=groupByStation(rows), out=[];
+
   for(const stationRows of groups.values()){
     stationRows.sort((a,b)=>a.ts-b.ts);
     const map=new Map(stationRows.map(r=>[r.ts,r]));
@@ -737,10 +770,25 @@ function buildSamples(rows,steps){
     for(const cur of stationRows){
       const f=makeFeature(cur,map);
       const target=map.get(cur.ts+steps*10*60*1000);
+
       if(!f||!target) continue;
-      out.push({x:f,y:target.temperature,currentTemp:cur.temperature,ts:cur.ts,targetTs:target.ts});
+
+      const targetTemp=target.temperature;
+      const deltaTemp=targetTemp-cur.temperature;
+
+      out.push({
+        x:f,
+        // 回帰モデルが学習する正解は「未来気温」ではなく「現在から何℃動くか」
+        y:deltaTemp,
+        deltaTemp,
+        targetTemp,
+        currentTemp:cur.temperature,
+        ts:cur.ts,
+        targetTs:target.ts
+      });
     }
   }
+
   return out.sort((a,b)=>a.ts-b.ts);
 }
 
@@ -891,23 +939,29 @@ function renderDataSummary(rows){
 function renderMetrics(){
   const body=$("metricsBody");
   body.innerHTML="";
+
   for(const h of HORIZONS){
     const r=modelResults.get(h.steps);
     const tr=document.createElement("tr");
+
     if(!r?.ok){
-      tr.innerHTML=`<td>${h.label}</td><td colspan="7">${escapeHtml(r?.error||"不可")}</td>`;
+      tr.innerHTML=`<td>${h.label}</td><td colspan="9">${escapeHtml(r?.error||"不可")}</td>`;
     }else{
-      const verdict=r.modelMae<r.baseMae?"AI優位":"単純予報優位";
-      const cls=r.modelMae<r.baseMae?"goodText":"badText";
+      const cls=r.useAI?"goodText":"warnText";
+
       tr.innerHTML=
         `<td>${h.label}</td>`+
-        `<td>${r.forecast.toFixed(1)} ℃</td>`+
+        `<td>${r.forecast.toFixed(1)} ℃ <span class="small">(${formatSigned(r.forecastDelta)}℃)</span></td>`+
+        `<td>${r.baselineForecast.toFixed(1)} ℃</td>`+
+        `<td><b>${r.adoptedForecast.toFixed(1)} ℃</b></td>`+
         `<td>${r.modelMae.toFixed(3)} ℃</td>`+
         `<td>${r.baseMae.toFixed(3)} ℃</td>`+
-        `<td class="${cls}">${r.improvement.toFixed(1)} %</td>`+
-        `<td>${r.trainCount}</td><td>${r.testCount}</td>`+
-        `<td class="${cls}">${verdict}</td>`;
+        `<td class="${r.improvement>=0?"goodText":"badText"}">${r.improvement.toFixed(1)} %</td>`+
+        `<td>${r.trainCount}</td>`+
+        `<td>${r.testCount}</td>`+
+        `<td class="${cls}"><b>${r.adoptedMethod}</b></td>`;
     }
+
     body.appendChild(tr);
   }
 }
@@ -928,13 +982,16 @@ function renderForecastCards(){
         `<div class="sub badText">${escapeHtml(r?.error||"不可")}</div>`;
     }else{
       const target=r.latestTs+h.minutes*60000;
-      const cls=r.modelMae<r.baseMae?"goodText":"badText";
+      const methodClass=r.useAI?"goodText":"warnText";
 
       card.innerHTML=
         `<div class="h">${h.label}後 / ${formatShort(target)}</div>`+
-        `<div class="temp">${r.forecast.toFixed(1)} ℃</div>`+
+        `<div class="small ${methodClass}">採用：${r.adoptedMethod}</div>`+
+        `<div class="temp">${r.adoptedForecast.toFixed(1)} ℃</div>`+
+        `<div class="sub">AI ${r.forecast.toFixed(1)}℃（ΔT ${formatSigned(r.forecastDelta)}℃）</div>`+
+        `<div class="sub">単純 ${r.baselineForecast.toFixed(1)}℃</div>`+
         `<div class="sub">起点 ${formatShort(r.latestTs)} / ${r.latestTemp.toFixed(1)}℃</div>`+
-        `<div class="sub ${cls}">AI MAE ${r.modelMae.toFixed(2)}℃ / 単純 ${r.baseMae.toFixed(2)}℃</div>`;
+        `<div class="sub ${r.improvement>=0?"goodText":"badText"}">AI MAE ${r.modelMae.toFixed(2)}℃ / 単純 ${r.baseMae.toFixed(2)}℃</div>`;
     }
 
     grid.appendChild(card);
@@ -959,17 +1016,22 @@ function drawForecastChart(){
     return;
   }
 
-  const points=[{x:originTs,y:originTemp}];
+  const ai=[{x:originTs,y:originTemp}];
   const base=[{x:originTs,y:originTemp}];
+  const adopted=[{x:originTs,y:originTemp}];
 
   for(const {h,r} of okResults){
-    points.push({x:r.latestTs+h.minutes*60000,y:r.forecast});
-    base.push({x:r.latestTs+h.minutes*60000,y:r.latestTemp});
+    const x=r.latestTs+h.minutes*60000;
+
+    ai.push({x,y:r.forecast});
+    base.push({x,y:r.baselineForecast});
+    adopted.push({x,y:r.adoptedForecast});
   }
 
   drawTimeChart($("forecastChart"),[
-    {label:"AI予測",points,color:"#6ea8fe",width:3},
-    {label:"単純",points:base,color:"#9ca8ba",width:2,dash:[7,5]}
+    {label:"AI予測",points:ai,color:"#6ea8fe",width:2.2,dash:[5,4]},
+    {label:"単純",points:base,color:"#9ca8ba",width:1.8,dash:[7,5]},
+    {label:"採用予報",points:adopted,color:"#f7c65d",width:3.2}
   ],{current:{x:originTs,y:originTemp}});
 }
 
@@ -991,31 +1053,44 @@ function renderSelectedBacktest(){
     {label:"単純",points:mk(r.testBase),color:"#9ca8ba",width:1.8,dash:[5,5]}
   ]);
   $("backtestTitle").textContent=
-    `${h.label}後：AI MAE ${r.modelMae.toFixed(3)}℃ / 単純 ${r.baseMae.toFixed(3)}℃ / テスト ${r.testCount}件`;
+    `${h.label}後：AI MAE ${r.modelMae.toFixed(3)}℃ / 単純 ${r.baseMae.toFixed(3)}℃ / `+
+    `暫定採用 ${r.adoptedMethod} / テスト ${r.testCount}件`;
 }
 
 function renderExplanation(){
   const steps=Number($("explainHorizon").value);
   const h=HORIZONS.find(x=>x.steps===steps);
   const r=modelResults.get(steps);
+
   if(!r?.ok){
     $("formula").textContent="この時間先はまだモデルを作れません。";
     $("contribBody").innerHTML="";
     return;
   }
-  const base=r.model.yMean;
-  const sum=r.contributions.reduce((s,x)=>s+x.contribution,0);
+
+  const meanDelta=r.model.yMean;
+  const contributionSum=r.contributions.reduce((s,x)=>s+x.contribution,0);
+  const reconstructedDelta=meanDelta+contributionSum;
+  const reconstructedTemp=r.latestTemp+reconstructedDelta;
+
   $("formula").innerHTML=
-    `<b>${h.label}後 ${r.forecast.toFixed(2)}℃</b><br>`+
-    `学習データの平均気温 <code>${base.toFixed(2)}℃</code>`+
-    ` ＋ 入力要素の合計寄与 <code>${sum>=0?"+":""}${sum.toFixed(2)}℃</code>`+
-    ` ＝ <code>${r.forecast.toFixed(2)}℃</code><br>`+
+    `<b>${h.label}後</b><br>`+
+    `現在気温 <code>${r.latestTemp.toFixed(2)}℃</code>`+
+    ` ＋ 学習データの平均ΔT <code>${formatSigned(meanDelta)}℃</code>`+
+    ` ＋ 入力要素の補正 <code>${formatSigned(contributionSum)}℃</code>`+
+    ` ＝ AI予測 <code>${reconstructedTemp.toFixed(2)}℃</code><br>`+
+    `<b>AI予測ΔT：<code>${formatSigned(r.forecastDelta)}℃</code></b><br>`+
+    `単純予報 <code>${r.baselineForecast.toFixed(2)}℃</code> / `+
+    `採用予報 <code>${r.adoptedForecast.toFixed(2)}℃（${r.adoptedMethod}）</code><br>`+
     `<span class="small">予測起点：${formatDateTime(r.latestTs)} / ${r.latestTemp.toFixed(1)}℃</span><br>`+
-    `<span class="small">各寄与は「今の値が、このモデルの学習平均からどれだけ離れているか × 学習係数」で算出。</span>`;
+    `<span class="small">寄与はすべて「未来気温そのもの」ではなく、現在気温からの補正量 ΔT に対する寄与です。</span>`;
 
   $("contribBody").innerHTML=r.contributions.map(c=>
-    `<tr><td>${escapeHtml(c.name)}</td><td>${formatFeature(c.value)}</td>`+
-    `<td class="${c.contribution>=0?"goodText":"badText"}">${c.contribution>=0?"+":""}${c.contribution.toFixed(3)} ℃</td></tr>`
+    `<tr>`+
+    `<td>${escapeHtml(c.name)}</td>`+
+    `<td>${formatFeature(c.value)}</td>`+
+    `<td class="${c.contribution>=0?"goodText":"badText"}">${formatSigned(c.contribution)} ℃</td>`+
+    `</tr>`
   ).join("");
 }
 
@@ -1244,6 +1319,10 @@ function safeFileName(t){return t.replace(/[\\/:*?"<>|]/g,"_").replace(/\s+/g,"_
 function formatDateTime(ts){const d=new Date(ts);return `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,"0")}/${String(d.getDate()).padStart(2,"0")} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`}
 function formatShort(ts){const d=new Date(ts);return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`}
 function formatFeature(v){return Math.abs(v)>=100?v.toFixed(1):v.toFixed(3)}
+function formatSigned(v){
+  if(!Number.isFinite(v)) return "-";
+  return `${v>=0?"+":""}${v.toFixed(2)}`;
+}
 function formatBytes(n){return n<1024?n+" B":n<1048576?(n/1024).toFixed(1)+" KB":(n/1048576).toFixed(1)+" MB"}
 function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
 function nextFrame(){return new Promise(r=>requestAnimationFrame(()=>r()))}
