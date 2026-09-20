@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Weather Forecast Lab v6</title>
+<title>Weather Forecast Lab v7</title>
 <style>
 :root{
   --bg:#0b1020;
@@ -138,7 +138,7 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
 <div class="wrap">
   <div class="hero">
     <div>
-      <h1>Weather Forecast Lab <span style="font-size:.38em;color:var(--muted)">v6</span></h1>
+      <h1>Weather Forecast Lab <span style="font-size:.38em;color:var(--muted)">v7</span></h1>
       <p>10分値をTSV化し、現在気温からの変化量 ΔT を学習して多時間先を予測するブラウザ完結型ダッシュボード</p>
     </div>
     <div class="badge">v6 / 全観測項目 + 10分刻み144モデル + ΔT補正</div>
@@ -182,8 +182,13 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
       <div class="actions">
         <button id="clearFiles" class="danger">過去TSVを全解除</button>
         <button id="run" class="primary">統合・学習・多時間予測</button>
+        <button id="walkForwardBtn" class="ghost">日別walk-forward検証</button>
         <button id="downloadMerged" class="ghost">補正済み統合TSVを保存</button>
       </div>
+      <div class="small">
+        通常実行では144本の未来予測を作成。walk-forwardは別実行にして、毎日の通常処理を重くしません。
+      </div>
+      <div id="walkForwardStatus" class="status">walk-forwardは未実行です。</div>
       <div id="fileList" class="file-list"></div>
       <div id="runStatus" class="status">過去TSVを選択してください。</div>
 
@@ -272,6 +277,55 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
     </section>
 
     <section class="panel full">
+      <h2>日別walk-forward検証</h2>
+      <div class="small">
+        各日の00:00を独立した予報起点として、その時点より後のデータを一切使わずに再学習します。
+        最低7日分の履歴をためてから開始し、同じ日々を代表8時間で比較します。
+        10分刻みの重複テストを大量に数える方式ではなく、「1日＝1ケース」で見るため、日ごとの安定性を確認しやすくなります。
+      </div>
+
+      <div class="table-wrap" style="margin-top:10px">
+        <table>
+          <thead>
+            <tr>
+              <th>予測先</th><th>検証日数</th><th>AI MAE</th><th>単純MAE</th>
+              <th>改善率</th><th>AI中央値誤差</th><th>AIバイアス</th><th>AI勝率</th>
+            </tr>
+          </thead>
+          <tbody id="walkForwardSummaryBody">
+            <tr><td colspan="8">「日別walk-forward検証」を押すと計算します。</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>日ごとの結果</h3>
+      <select id="walkForwardHorizon">
+        <option value="1">10分後</option>
+        <option value="3">30分後</option>
+        <option value="6" selected>1時間後</option>
+        <option value="12">2時間後</option>
+        <option value="18">3時間後</option>
+        <option value="36">6時間後</option>
+        <option value="72">12時間後</option>
+        <option value="144">24時間後</option>
+      </select>
+      <div class="table-wrap" style="margin-top:10px;max-height:360px">
+        <table>
+          <thead>
+            <tr>
+              <th>予報起点</th><th>対象時刻</th><th>起点気温</th>
+              <th>実測</th><th>AI</th><th>AI誤差</th>
+              <th>単純誤差</th><th>勝者</th><th>学習数</th>
+            </tr>
+          </thead>
+          <tbody id="walkForwardDetailBody">
+            <tr><td colspan="9">未実行</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel full">
       <h2>時間別の精度</h2>
       <div class="table-wrap">
         <table>
@@ -321,9 +375,11 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
           平均風速・平均風向、最大瞬間風速・最大瞬間風向、日照時間を入力し、
           さらに降水累積、降り始め/雨上がり、風向ベクトル、突風強度、日照累積、
           各種時間変化へ展開します。季節周期は90日未満では無効です。<br><br>
-          <b>検証：</b>古い側で学習し、新しい側でテストします。
-          予測対象期間が学習側へ食い込まないよう、予測時間ぶんの境界を空けています。
-          実際の未来予測は、その後に全利用可能データで再学習します。<br><br>
+          <b>通常検証：</b>古い側80%前後で学習し、新しい側20%前後をテストします。
+          予測対象期間が学習側へ食い込まないよう、予測時間ぶんの境界を空けています。<br><br>
+          <b>日別walk-forward：</b>別ボタンで実行します。各日00:00時点までに判明している情報だけで再学習し、
+          その日の未来を予測します。「1日＝1ケース」で集計するため、通常の10分刻みテストより独立性の高い補助評価になります。<br><br>
+          <b>実際の未来予測：</b>全利用可能データで再学習します。<br><br>
           <b>採用予報：</b>各予測時間について、過去検証MAEが小さい方を暫定採用します。
           AIが単純予報に負けていれば現在気温固定、勝っていればAI予報を採用します。
         </div>
@@ -455,6 +511,9 @@ let modelResults = new Map();
 let sourceDiagnostics = [];
 let useSeasonFeatures = false;
 let featureCache = new Map();
+let stationContextCache = null;
+let latestFeatureCache = null;
+let walkForwardResults = new Map();
 
 setToday();
 if($("featureCountText")) $("featureCountText").textContent=`${FEATURE_NAMES.length}個`;
@@ -586,6 +645,8 @@ $("downloadMerged").addEventListener("click", () => {
 });
 
 $("run").addEventListener("click", runAll);
+$("walkForwardBtn").addEventListener("click", runWalkForward);
+$("walkForwardHorizon").addEventListener("change", renderWalkForwardDetail);
 $("backtestHorizon").addEventListener("change", renderSelectedBacktest);
 $("explainHorizon").addEventListener("change", renderExplanation);
 
@@ -609,10 +670,16 @@ function renderFileList(){
 
 async function runAll(){
   return (async () => {
+    const started=performance.now();
+
     try{
       $("runStatus").textContent="読み込み・診断中...";
       const all=[];
       sourceDiagnostics=[];
+      walkForwardResults=new Map();
+      renderWalkForwardSummary();
+      renderWalkForwardDetail();
+      $("walkForwardStatus").textContent="walk-forwardは未実行です。";
 
       const preferFilenameDate = $("preferFilenameDate").checked;
 
@@ -658,15 +725,21 @@ async function runAll(){
 
       useSeasonFeatures = countDays(globalRows) >= 90;
       featureCache = new Map();
+      prepareRunCaches(globalRows);
 
       renderDiagnostics(globalRows,duplicateCount,preferFilenameDate);
       renderDataSummary(globalRows);
 
       modelResults=new Map();
 
-      for(const h of ALL_HORIZONS){
-        $("runStatus").textContent=`学習中... ${h.label}後モデル (${h.steps}/144)`;
-        await nextFrame();
+      for(let i=0;i<ALL_HORIZONS.length;i++){
+        const h=ALL_HORIZONS[i];
+
+        if(i===0 || i%8===0 || i===ALL_HORIZONS.length-1){
+          $("runStatus").textContent=`学習中... ${h.label}後モデル (${h.steps}/144)`;
+          await nextFrame();
+        }
+
         const result=trainForHorizon(globalRows,h.steps);
         modelResults.set(h.steps,result);
       }
@@ -678,12 +751,15 @@ async function runAll(){
       renderSelectedBacktest();
       renderExplanation();
 
+      const elapsed=(performance.now()-started)/1000;
+
       $("runStatus").textContent =
         `完了：${stagedFiles.length}個の過去TSV${currentIncluded ? " + 今日の入力" : ""}を統合\n` +
         `観測 ${globalRows.length.toLocaleString()}行 / 収録 ${countDays(globalRows)}日\n` +
         `重複除去 ${duplicateCount.toLocaleString()}行 / 季節特徴 ${useSeasonFeatures ? "ON" : "OFF（90日未満）"}\n` +
         `未来予測モデル 144本（10分刻み・24時間先まで）\n` +
-        `AI入力特徴量 ${FEATURE_NAMES.length}個 / 元観測列を全項目使用`;
+        `AI入力特徴量 ${FEATURE_NAMES.length}個 / 元観測列を全項目使用\n` +
+        `通常計算時間 ${elapsed.toFixed(2)}秒`;
     }catch(e){
       $("runStatus").textContent="エラー\n"+e.message;
     }
@@ -939,12 +1015,64 @@ function trainForHorizon(rows,steps){
   };
 }
 
-function buildSamples(rows,steps){
-  const groups=groupByStation(rows), out=[];
 
-  for(const stationRows of groups.values()){
-    stationRows.sort((a,b)=>a.ts-b.ts);
-    const map=new Map(stationRows.map(r=>[r.ts,r]));
+function prepareRunCaches(rows){
+  stationContextCache=new Map();
+
+  for(const [station,stationRows0] of groupByStation(rows).entries()){
+    const stationRows=[...stationRows0].sort((a,b)=>a.ts-b.ts);
+    stationContextCache.set(station,{
+      rows:stationRows,
+      map:new Map(stationRows.map(r=>[r.ts,r]))
+    });
+  }
+
+  latestFeatureCache=null;
+
+  if(rows.length){
+    const latest=[...rows].sort((a,b)=>a.ts-b.ts).at(-1);
+    const ctx=stationContextCache.get(latest.station);
+
+    if(ctx){
+      const x=makeFeature(latest,ctx.map);
+
+      latestFeatureCache=x ? {
+        ok:true,
+        ts:latest.ts,
+        station:latest.station,
+        currentTemp:latest.temperature,
+        x
+      } : {
+        ok:false,
+        ts:latest.ts,
+        station:latest.station,
+        currentTemp:latest.temperature,
+        missing:getMissingFeatureLabels(latest,ctx.map)
+      };
+    }
+  }
+}
+
+function buildSamples(rows,steps){
+  const out=[];
+
+  let contexts;
+
+  if(rows===globalRows && stationContextCache){
+    contexts=[...stationContextCache.values()];
+  }else{
+    contexts=[...groupByStation(rows).values()].map(stationRows0=>{
+      const stationRows=[...stationRows0].sort((a,b)=>a.ts-b.ts);
+      return {
+        rows:stationRows,
+        map:new Map(stationRows.map(r=>[r.ts,r]))
+      };
+    });
+  }
+
+  for(const ctx of contexts){
+    const stationRows=ctx.rows;
+    const map=ctx.map;
 
     for(const cur of stationRows){
       const f=makeFeature(cur,map);
@@ -957,7 +1085,6 @@ function buildSamples(rows,steps){
 
       out.push({
         x:f,
-        // 回帰モデルが学習する正解は「未来気温」ではなく「現在から何℃動くか」
         y:deltaTemp,
         deltaTemp,
         targetTemp,
@@ -972,13 +1099,23 @@ function buildSamples(rows,steps){
 }
 
 function buildLatestFeature(rows){
+  if(rows===globalRows && latestFeatureCache){
+    return latestFeatureCache;
+  }
+
   if(!rows.length) return null;
 
   const sorted=[...rows].sort((a,b)=>a.ts-b.ts);
   const absoluteLatest=sorted[sorted.length-1];
 
-  const stationRows=sorted.filter(r=>r.station===absoluteLatest.station);
-  const map=new Map(stationRows.map(r=>[r.ts,r]));
+  let map;
+
+  if(rows===globalRows && stationContextCache?.has(absoluteLatest.station)){
+    map=stationContextCache.get(absoluteLatest.station).map;
+  }else{
+    const stationRows=sorted.filter(r=>r.station===absoluteLatest.station);
+    map=new Map(stationRows.map(r=>[r.ts,r]));
+  }
 
   const x=makeFeature(absoluteLatest,map);
 
@@ -1146,30 +1283,74 @@ function makeFeature(cur,map){
 
 function trainRidgeClosedForm(samples,lambda){
   const X=samples.map(s=>s.x), y=samples.map(s=>s.y), p=X[0].length, n=X.length;
-  const xMean=Array(p).fill(0),xStd=Array(p).fill(0);
-  for(const r of X) for(let j=0;j<p;j++) xMean[j]+=r[j];
+
+  const xMean=Array(p).fill(0);
+  const xStd=Array(p).fill(0);
+
+  for(const r of X){
+    for(let j=0;j<p;j++) xMean[j]+=r[j];
+  }
+
   for(let j=0;j<p;j++) xMean[j]/=n;
-  for(const r of X) for(let j=0;j<p;j++) xStd[j]+=(r[j]-xMean[j])**2;
-  for(let j=0;j<p;j++){xStd[j]=Math.sqrt(xStd[j]/n);if(xStd[j]<1e-9)xStd[j]=1}
+
+  for(const r of X){
+    for(let j=0;j<p;j++){
+      const d=r[j]-xMean[j];
+      xStd[j]+=d*d;
+    }
+  }
+
+  for(let j=0;j<p;j++){
+    xStd[j]=Math.sqrt(xStd[j]/n);
+    if(xStd[j]<1e-9) xStd[j]=1;
+  }
 
   const yMean=y.reduce((a,b)=>a+b,0)/n;
-  let yStd=Math.sqrt(y.reduce((s,v)=>s+(v-yMean)**2,0)/n);
-  if(yStd<1e-9)yStd=1;
+
+  let yVar=0;
+  for(const v of y){
+    const d=v-yMean;
+    yVar+=d*d;
+  }
+
+  let yStd=Math.sqrt(yVar/n);
+  if(yStd<1e-9) yStd=1;
 
   const A=Array.from({length:p},()=>Array(p).fill(0));
   const b=Array(p).fill(0);
+  const z=Array(p).fill(0);
 
   for(let i=0;i<n;i++){
-    const z=X[i].map((v,j)=>(v-xMean[j])/xStd[j]);
-    const ty=(y[i]-yMean)/yStd;
+    const row=X[i];
+
     for(let j=0;j<p;j++){
-      b[j]+=z[j]*ty;
-      for(let k=0;k<p;k++) A[j][k]+=z[j]*z[k];
+      z[j]=(row[j]-xMean[j])/xStd[j];
+    }
+
+    const ty=(y[i]-yMean)/yStd;
+
+    for(let j=0;j<p;j++){
+      const zj=z[j];
+      b[j]+=zj*ty;
+
+      // 対称行列なので上三角だけ計算
+      for(let k=j;k<p;k++){
+        A[j][k]+=zj*z[k];
+      }
     }
   }
-  for(let j=0;j<p;j++) A[j][j]+=lambda*n;
+
+  // 下三角へコピー
+  for(let j=0;j<p;j++){
+    for(let k=j+1;k<p;k++){
+      A[k][j]=A[j][k];
+    }
+
+    A[j][j]+=lambda*n;
+  }
 
   const weights=solveLinearSystem(A,b);
+
   return {weights,xMean,xStd,yMean,yStd};
 }
 
@@ -1244,6 +1425,219 @@ function renderDenseForecastTable(){
         `<td>${r.modelMae.toFixed(3)} ℃</td>`+
         `<td>${r.baseMae.toFixed(3)} ℃</td>`;
     }
+
+    body.appendChild(tr);
+  }
+}
+
+
+async function runWalkForward(){
+  if(!globalRows.length || !modelResults.size){
+    $("walkForwardStatus").textContent="先に「統合・学習・多時間予測」を実行してください。";
+    return;
+  }
+
+  const started=performance.now();
+
+  try{
+    walkForwardResults=new Map();
+    $("walkForwardStatus").textContent="日別walk-forwardを準備中...";
+
+    const latestStation=globalRows.at(-1).station;
+    const ctx=stationContextCache?.get(latestStation);
+
+    if(!ctx){
+      throw new Error("地点データを取得できません。");
+    }
+
+    const rows=ctx.rows;
+    const map=ctx.map;
+    const firstTs=rows[0].ts;
+    const latestTs=rows.at(-1).ts;
+
+    // すべての代表時間で同じ日を比較できるよう、
+    // 24時間後まで実測が存在する00:00起点だけを採用する。
+    const commonOrigins=rows.filter(r=>{
+      const d=new Date(r.ts);
+
+      return (
+        d.getHours()===0 &&
+        d.getMinutes()===0 &&
+        r.ts-firstTs>=7*86400000 &&
+        r.ts+24*60*60*1000<=latestTs &&
+        !!makeFeature(r,map)
+      );
+    });
+
+    if(commonOrigins.length<2){
+      throw new Error("日別walk-forwardには、7日以上の学習期間に加えて複数の検証日が必要です。");
+    }
+
+    for(let hi=0;hi<DISPLAY_HORIZONS.length;hi++){
+      const h=DISPLAY_HORIZONS[hi];
+
+      $("walkForwardStatus").textContent=
+        `日別walk-forward計算中... ${h.label}後 (${hi+1}/${DISPLAY_HORIZONS.length})`;
+      await nextFrame();
+
+      const samples=buildSamples(globalRows,h.steps);
+      const cases=[];
+
+      for(let oi=0;oi<commonOrigins.length;oi++){
+        const origin=commonOrigins[oi];
+        const target=map.get(origin.ts+h.minutes*60*1000);
+
+        if(!target) continue;
+
+        // 予報起点の時点で「正解まで既に判明している」過去サンプルだけを使う。
+        const train=samples.filter(s=>s.targetTs<=origin.ts);
+
+        if(train.length<300) continue;
+
+        const x=makeFeature(origin,map);
+        if(!x) continue;
+
+        const model=trainRidgeClosedForm(train,0.8);
+        const delta=predictModel(model,x);
+        const ai=origin.temperature+delta;
+        const baseline=origin.temperature;
+        const actual=target.temperature;
+
+        const aiError=ai-actual;
+        const baseError=baseline-actual;
+
+        cases.push({
+          originTs:origin.ts,
+          targetTs:target.ts,
+          originTemp:origin.temperature,
+          actual,
+          ai,
+          baseline,
+          aiError,
+          baseError,
+          aiAbs:Math.abs(aiError),
+          baseAbs:Math.abs(baseError),
+          trainCount:train.length
+        });
+      }
+
+      if(!cases.length){
+        walkForwardResults.set(h.steps,{
+          ok:false,
+          error:"検証ケース不足"
+        });
+        continue;
+      }
+
+      const aiMae=cases.reduce((s,c)=>s+c.aiAbs,0)/cases.length;
+      const baseMae=cases.reduce((s,c)=>s+c.baseAbs,0)/cases.length;
+      const improvement=baseMae>0?(baseMae-aiMae)/baseMae*100:0;
+      const bias=cases.reduce((s,c)=>s+c.aiError,0)/cases.length;
+      const aiWins=cases.filter(c=>c.aiAbs<c.baseAbs).length;
+      const ties=cases.filter(c=>Math.abs(c.aiAbs-c.baseAbs)<1e-12).length;
+      const winRate=(aiWins+ties*0.5)/cases.length*100;
+
+      const sortedAE=cases.map(c=>c.aiAbs).sort((a,b)=>a-b);
+      const mid=Math.floor(sortedAE.length/2);
+      const medianAE=sortedAE.length%2
+        ? sortedAE[mid]
+        : (sortedAE[mid-1]+sortedAE[mid])/2;
+
+      walkForwardResults.set(h.steps,{
+        ok:true,
+        steps:h.steps,
+        label:h.label,
+        cases,
+        days:cases.length,
+        aiMae,
+        baseMae,
+        improvement,
+        bias,
+        medianAE,
+        winRate
+      });
+    }
+
+    renderWalkForwardSummary();
+    renderWalkForwardDetail();
+
+    const elapsed=(performance.now()-started)/1000;
+
+    $("walkForwardStatus").textContent=
+      `完了：日別walk-forward ${commonOrigins.length}日分 × 代表8時間\n`+
+      `各日00:00時点までの情報だけで再学習\n`+
+      `計算時間 ${elapsed.toFixed(2)}秒\n`+
+      `※通常144本予報とは別計算。毎回自動では実行しません。`;
+
+  }catch(e){
+    $("walkForwardStatus").textContent="エラー\n"+e.message;
+  }
+}
+
+function renderWalkForwardSummary(){
+  const body=$("walkForwardSummaryBody");
+  if(!body) return;
+
+  body.innerHTML="";
+
+  if(!walkForwardResults.size){
+    body.innerHTML='<tr><td colspan="8">「日別walk-forward検証」を押すと計算します。</td></tr>';
+    return;
+  }
+
+  for(const h of DISPLAY_HORIZONS){
+    const r=walkForwardResults.get(h.steps);
+    const tr=document.createElement("tr");
+
+    if(!r?.ok){
+      tr.innerHTML=`<td>${h.label}</td><td colspan="7">${escapeHtml(r?.error||"不可")}</td>`;
+    }else{
+      tr.innerHTML=
+        `<td>${h.label}</td>`+
+        `<td>${r.days}</td>`+
+        `<td>${r.aiMae.toFixed(3)} ℃</td>`+
+        `<td>${r.baseMae.toFixed(3)} ℃</td>`+
+        `<td class="${r.improvement>=0?"goodText":"badText"}">${r.improvement.toFixed(1)} %</td>`+
+        `<td>${r.medianAE.toFixed(3)} ℃</td>`+
+        `<td>${formatSigned(r.bias)} ℃</td>`+
+        `<td>${r.winRate.toFixed(1)} %</td>`;
+    }
+
+    body.appendChild(tr);
+  }
+}
+
+function renderWalkForwardDetail(){
+  const body=$("walkForwardDetailBody");
+  if(!body) return;
+
+  body.innerHTML="";
+
+  const steps=Number($("walkForwardHorizon")?.value||6);
+  const r=walkForwardResults.get(steps);
+
+  if(!r?.ok){
+    body.innerHTML='<tr><td colspan="9">walk-forward未実行、またはこの時間は検証できません。</td></tr>';
+    return;
+  }
+
+  for(const c of r.cases){
+    const winner=
+      c.aiAbs<c.baseAbs ? "AI" :
+      c.aiAbs>c.baseAbs ? "単純" : "引分";
+
+    const tr=document.createElement("tr");
+
+    tr.innerHTML=
+      `<td>${formatDateTime(c.originTs)}</td>`+
+      `<td>${formatDateTime(c.targetTs)}</td>`+
+      `<td>${c.originTemp.toFixed(1)} ℃</td>`+
+      `<td>${c.actual.toFixed(1)} ℃</td>`+
+      `<td>${c.ai.toFixed(2)} ℃</td>`+
+      `<td>${c.aiError>=0?"+":""}${c.aiError.toFixed(2)} ℃</td>`+
+      `<td>${c.baseError>=0?"+":""}${c.baseError.toFixed(2)} ℃</td>`+
+      `<td class="${winner==="AI"?"goodText":winner==="単純"?"warnText":""}"><b>${winner}</b></td>`+
+      `<td>${c.trainCount}</td>`;
 
     body.appendChild(tr);
   }
