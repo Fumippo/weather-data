@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Weather Forecast Lab v8.6.1 Spatial-2</title>
+<title>Weather Forecast Lab v9.0 Residual</title>
 <style>
 :root{
   --bg:#0b1020;
@@ -138,10 +138,10 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
 <div class="wrap">
   <div class="hero">
     <div>
-      <h1>Weather Forecast Lab <span style="font-size:.38em;color:var(--muted)">v8.6.1 Spatial-2</span></h1>
+      <h1>Weather Forecast Lab <span style="font-size:.38em;color:var(--muted)">v9.0 Residual</span></h1>
       <p>10分値を主軸に、1時間補助観測を時間リークなしで結合し、ΔTモデルを比較検証するブラウザ完結型ダッシュボード</p>
     </div>
-    <div class="badge">v8.6 / v8.5 exact高速化 + 神戸Spatial-2 A/B + 降水診断</div>
+    <div class="badge">v9.0 / baseline residual + reliability blend + Spatial-2 A/B + 降水診断</div>
   </div>
 
   <div class="grid">
@@ -365,7 +365,7 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
       <div id="forecastGrid" class="forecast-grid"></div>
       <div class="chart-wrap"><canvas id="forecastChart" width="1250" height="390"></canvas></div>
       <div class="legend">
-        <span><i class="dot" style="background:#6ea8fe"></i>AI予測（ΔT補正）</span>
+        <span><i class="dot" style="background:#6ea8fe"></i>full residual AI</span>
         <span><i class="dot" style="background:#9ca8ba"></i>基準予報</span>
         <span><i class="dot" style="background:#f7c65d"></i>採用予報</span>
         <span><i class="dot" style="background:#2fc47e"></i>現在実測</span>
@@ -485,7 +485,7 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
     <section class="panel full">
       <h2>日別walk-forward検証</h2>
       <div class="small">
-        各日の00:00を独立した予報起点として、その時点より後のデータを一切使わずに再学習します。
+        各日の00:00を独立した予報起点として、その時点より後のデータを一切使わずにbaseline選択＋residual ridgeを再学習します。
         最低7日分の履歴をためてから開始し、同じ日々を代表8時間で比較します。
         10分刻みの重複テストを大量に数える方式ではなく、「1日＝1ケース」で見るため、日ごとの安定性を確認しやすくなります。
       </div>
@@ -642,6 +642,27 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
     </section>
 
     <section class="panel full">
+      <h2>v9 残差AIの信用度（自動4起点walk-forward）</h2>
+      <div class="small">
+        00/06/12/18起点のout-of-sample予測だけで、<code>基準 + α × AI残差</code> のαを0～1から選びます。
+        α=0は基準のみ、α=1は残差AIを全量使用。代表8 horizon間は線形補間します。
+      </div>
+      <div class="table-wrap" style="margin-top:10px">
+        <table>
+          <thead>
+            <tr>
+              <th>予測先</th><th>ケース</th><th>基準MAE</th><th>full residual MAE</th>
+              <th>α</th><th>blend MAE</th><th>blend改善率</th>
+            </tr>
+          </thead>
+          <tbody id="v9ReliabilityBody">
+            <tr><td colspan="7">統合・学習後に表示します。</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel full">
       <h2>時間別の精度</h2>
       <div class="table-wrap">
         <table>
@@ -682,11 +703,13 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
       <section class="panel">
         <h2>モデルについて</h2>
         <div class="explain">
-          <b>予測方式：</b>時間ごとの「気温変化量 ΔT」直接リッジ回帰。<br>
-          未来気温そのものではなく、<b>未来気温 − 現在気温</b>を学習します。
-          10分後から24時間後まで10分刻みで144個の別モデルを学習します。表の代表時間だけでなく、20分後・40分後・5時間10分後なども直接予測します。<br><br>
-          <b>最終計算：</b>現在気温 ＋ AIが予測したΔT ＝ AI未来気温。<br>
-          これにより短時間予報で学習平均へ無理に引っ張られる挙動を抑えます。<br><br>
+          <b>予測方式：</b>v9は時間ごとの「baseline residual」直接リッジ回帰。<br>
+          まず学習側だけで「現在値固定 / 前日同時刻 / 過去3日同時刻中央値 / 3日同時刻トレンド」から基準予報を選び、
+          AIは <b>未来気温 − 基準予報</b> だけを学習します。
+          10分後から24時間後まで10分刻みで144個の別モデルを学習します。20分後・40分後・5時間10分後なども補間ではなく直接予測します。<br><br>
+          <b>最終計算：</b>基準予報 ＋ α × AI残差補正 ＝ v9採用予報。<br>
+          αは現在までの00/06/12/18起点walk-forward out-of-sample予測から0～1で選び、
+          代表8 horizonの間を補間します。v8系の「AIか基準か」のhard switchは廃止します。<br><br>
           <b>入力：</b>元表の観測情報を全項目使用します。気温、相対湿度、現地気圧、海面気圧、降水量、
           平均風速・平均風向、最大瞬間風速・最大瞬間風向、日照時間を入力し、
           さらに降水累積、降り始め/雨上がり、風向ベクトル、突風強度、日照累積、
@@ -695,18 +718,20 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
           予測対象期間が学習側へ食い込まないよう、予測時間ぶんの境界を空けています。<br><br>
           <b>日別walk-forward：</b>別ボタンで実行します。各日00:00時点までに判明している情報だけで再学習し、
           その日の未来を予測します。「1日＝1ケース」で集計するため、通常の10分刻みテストより独立性の高い補助評価になります。<br><br>
-          <b>実際の未来予測：</b>全利用可能データで再学習します。v8.5でも本番144モデルはv7系51特徴量ですが、降水raw/微量降水の意味論をv8.4で修正しています。ただし比較基準は現在値固定だけでなく前日同時刻も候補にし、学習側だけで選びます。<br><br>
+          <b>実際の未来予測：</b>全利用可能データで再学習します。本番51特徴量はv8.6系を固定し、
+          v9.0では「特徴量を盛る」よりtarget設計と採用構造を変更します。降水raw/微量降水の意味論は維持します。
+          本番baselineは現在までに正解が確定した履歴だけで再選択します。<br><br>
           <b>1時間補助観測：</b>raw → normalized → features を分離し、各値の時間意味論と availability を管理します。
           補助情報はまず代表8 horizonの実験モデルだけへ投入し、本番へ自動昇格させません。<br>
-        <b>v8.5特殊表記：</b>雲量 <code>0+</code> は代表値0.5、<code>10-</code> は代表値9.5としてモデルへ渡しますが、raw記号と特殊表記フラグを残します。
+        <b>特殊表記：</b>雲量 <code>0+</code> は代表値0.5、<code>10-</code> は代表値9.5としてモデルへ渡しますが、raw記号と特殊表記フラグを残します。
         降水量 <code>0.0</code> は累積量を水増しせず0mmのまま、降水現象フラグだけ1として扱います。<br><br>
           <b>総合10分刻み予報：</b>別ボタンで、湿度・海面気圧・平均風速・最大瞬間風速を
           10分後～24時間後まで144点直接予測し、各変数は学習側だけで選んだ「現在値固定 / 前日同時刻」と比較して採用します。
           降水riskは「その時刻 / その後30分 / 1時間 / 3時間」を別ターゲットとして直接学習します。
           派生体感値は採用気温・採用湿度・採用風速から不快指数・露点・Humidex・Heat Index・体感温度・
           簡易湿球温度・絶対湿度・VPDを算出します。WBGTは必要観測が不足するため公式値としては出しません。<br><br>
-          <b>採用予報：</b>各予測時間について、AIと基準予報の過去検証MAEを比較して暫定採用します。
-          基準予報は「現在値固定」と「前日同時刻」のどちらを使うかを学習側だけで決め、テストを見て都合よく切り替えません。
+          <b>採用予報：</b>hard switchは使いません。各horizonのAI残差を、過去の4起点walk-forwardで決めた信用度αだけ基準予報へ足します。
+          固定holdoutは診断として残し、αそのものはout-of-sampleの過去予報から決めます。
         </div>
       </section>
     </div>
@@ -721,7 +746,7 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
         風向は16方位を東西/南北ベクトルへ変換、最大瞬間風は突風増幅量と1時間/3時間最大値、
         日照は30分/1時間/3時間累積、気温・気圧・湿度・風速は複数時間差を使用します。<br><br>
         <b>本番特徴量数：</b><span id="featureCountText"></span><br><br>
-        <b>v8.5実験候補：</b>全天日射量（最新・age・3時間累積・availability）、
+        <b>v9実験レイヤー：</b>全天日射量（最新・age・3時間累積・availability）、
         雲量（最新・age・availability）。露点・蒸気圧・視程・天気はnormalized層へ保存しますが、
         初期A/Bではまだ投入しません。
       </div>
@@ -832,7 +857,7 @@ const FEATURE_NAMES = [
 ];
 
 
-const PARSER_VERSION = "8.6.0";
+const PARSER_VERSION = "9.0.0";
 
 // 1時間値のうち、v8.4 A/Bで使う特徴群。
 // raw/normalized層では露点・蒸気圧・視程・天気等も保持する。
@@ -922,6 +947,8 @@ let baseSampleCache = new Map();
 let denseRidgeCache = null;
 let perfCounters = null;
 let walkForwardResults = new Map();
+let v9ReliabilityProfile = new Map();
+let v9ReliabilityMeta = {computed:false};
 
 // v8.4: 1時間補助観測は10分値とは別レイヤー
 let stagedHourlyFiles = [];
@@ -2417,7 +2444,18 @@ async function runAll(){
       renderDataSummary(globalRows);
       renderHourlyDiagnostics();
 
-      // ---- 本番51特徴量：AI本体はv7互換。baseline評価はv8.5でも強化版 ----
+      // ---- v9 reliability profile ----
+      // 代表8horizonについて00/06/12/18起点のout-of-sample予測を作り、
+      // residual補正を何割使うか(alpha)を現在までの履歴だけで決める。
+      $("runStatus").textContent="v9 reliability profileを計算中... 00/06/12/18 walk-forward";
+      await nextFrame();
+      v9ReliabilityProfile=computeV9ReliabilityProfile(globalRows);
+      v9ReliabilityMeta={
+        computed:[...v9ReliabilityProfile.values()].some(r=>r?.ok),
+        generatedAt:Date.now()
+      };
+
+      // ---- v9本番：51特徴量は固定、targetだけbaseline residualへ変更 ----
       modelResults=new Map();
       const trainingStart=performance.now();
 
@@ -2425,7 +2463,7 @@ async function runAll(){
         const h=ALL_HORIZONS[i];
 
         if(i===0 || i%8===0 || i===ALL_HORIZONS.length-1){
-          $("runStatus").textContent=`本番51特徴量を学習中... ${h.label}後 (${h.steps}/144)`;
+          $("runStatus").textContent=`v9 baseline-residual 51特徴量を学習中... ${h.label}後 (${h.steps}/144)`;
           await nextFrame();
         }
 
@@ -2435,6 +2473,7 @@ async function runAll(){
       const trainingDone=performance.now();
       const renderStart=performance.now();
 
+      renderV9ReliabilityProfile();
       renderMetrics();
       renderForecastCards();
       drawForecastChart();
@@ -2456,8 +2495,10 @@ async function runAll(){
         ` / 1時間補助 ${stagedHourlyFiles.length}過去TSV${currentHourlyIncluded ? " + 今日入力" : ""}\n`+
         `10分観測 ${globalRows.length.toLocaleString()}行 / ${countDays(globalRows)}日 / 重複除去 ${duplicateCount.toLocaleString()}行\n`+
         `1時間補助 ${globalHourlyRows.length.toLocaleString()}行 / ${countDays(globalHourlyRows)}日\n`+
-        `本番モデル 144本 / 本番特徴量 ${FEATURE_NAMES.length}個 / 51特徴量構造はv7系（降水raw/微量降水の意味論はv8.4で保持） / 基準予報は強化版\n`+
-        `10分availability 0分lag（v7互換・未確認） / 季節特徴 ${useSeasonFeatures ? "ON" : "OFF（90日未満）"}\n`+
+        `本番モデル 144本 / 本番特徴量 ${FEATURE_NAMES.length}個 / v9 baseline-residual ridge / hard switch廃止\n`+
+        `v9 alpha（4起点WF） ${DISPLAY_HORIZONS.map(h=>{const q=v9ReliabilityProfile.get(h.steps);return `${h.label}:${q?.ok?q.alpha.toFixed(2):"-"}`}).join(" / ")}\n`+
+        `基準候補：現在値固定 / 前日同時刻 / 過去3日同時刻中央値 / 3日同時刻トレンド（各foldの学習側だけで選択）\n`+
+        `10分availability 0分lag（未確認） / 季節特徴 ${useSeasonFeatures ? "ON" : "OFF（90日未満）"}\n`+
         `通常計算時間 ${elapsed.toFixed(2)}秒（前処理 ${preprocessSec.toFixed(2)} / 144モデル ${trainingSec.toFixed(2)} / 描画 ${renderSec.toFixed(2)}秒）\n`+
         `exact高速path ${exact} (${denseMode}) / prefix統計メモリ ${mem} / 高速single fit ${perfCounters.denseSingleFits}回 / fallback ${perfCounters.fallbackSingleFits}回`;
     }catch(e){
@@ -2687,35 +2728,223 @@ function parseTsvRows(text,overrideDate=null,sourceName=""){
   return out;
 }
 
-function selectBaselineMethodFromTrain(samples){
-  const common=samples.filter(s=>Number.isFinite(s.diurnalBaseline));
 
-  // 比較対象が少なすぎる間は従来の現在値固定を使う。
-  if(common.length<20) return "flat";
-
-  const flatMae=common.reduce((sum,s)=>sum+Math.abs(s.currentTemp-s.targetTemp),0)/common.length;
-  const diurnalMae=common.reduce((sum,s)=>sum+Math.abs(s.diurnalBaseline-s.targetTemp),0)/common.length;
-
-  return diurnalMae<flatMae ? "diurnal" : "flat";
+function baselineCandidateMethods(){
+  return ["flat","diurnal","median3","trend3"];
 }
 
 function baselineLabel(method){
-  return method==="diurnal" ? "前日同時刻" : "現在値固定";
+  if(method==="diurnal") return "前日同時刻";
+  if(method==="median3") return "過去3日同時刻中央値";
+  if(method==="trend3") return "3日同時刻トレンド";
+  return "現在値固定";
 }
 
 function baselineForSample(s,method){
   if(method==="diurnal" && Number.isFinite(s.diurnalBaseline)) return s.diurnalBaseline;
-  return s.currentTemp;
+  if(method==="median3" && Number.isFinite(s.diurnalMedian3)) return s.diurnalMedian3;
+  if(method==="trend3" && Number.isFinite(s.diurnalTrend3)) return s.diurnalTrend3;
+  if(method==="flat") return s.currentTemp;
+  return NaN;
+}
+
+function baselineCandidateMae(samples,method){
+  const vals=samples
+    .map(s=>({b:baselineForSample(s,method),y:s.targetTemp}))
+    .filter(z=>Number.isFinite(z.b)&&Number.isFinite(z.y));
+  if(!vals.length) return NaN;
+  return vals.reduce((sum,z)=>sum+Math.abs(z.b-z.y),0)/vals.length;
+}
+
+function selectBaselineMethodFromTrain(samples){
+  // v9: flat / 前日 / 3日中央値 / 3日トレンドを「学習側だけ」で比較。
+  // 候補間のsample差で勝敗が歪まないよう、原則として4候補すべて揃う共通cohortを使う。
+  const methods=baselineCandidateMethods();
+  const common=samples.filter(s=>methods.every(m=>Number.isFinite(baselineForSample(s,m))));
+
+  if(common.length>=30){
+    const scores=methods.map((method,complexity)=>({
+      method,
+      complexity,
+      mae:baselineCandidateMae(common,method)
+    })).filter(x=>Number.isFinite(x.mae));
+
+    const best=Math.min(...scores.map(x=>x.mae));
+    // 0.5%以内なら複雑な基準へ乗り換えず、より単純なものを採用。
+    const tolerance=0.005;
+    const parsimonious=scores
+      .filter(x=>x.mae<=best*(1+tolerance)+1e-12)
+      .sort((a,b)=>a.complexity-b.complexity)[0];
+    return parsimonious?.method || "flat";
+  }
+
+  // データ初期はv8系互換の2候補。
+  const commonD1=samples.filter(s=>Number.isFinite(s.diurnalBaseline));
+  if(commonD1.length<20) return "flat";
+  const flatMae=baselineCandidateMae(commonD1,"flat");
+  const diurnalMae=baselineCandidateMae(commonD1,"diurnal");
+  return diurnalMae<flatMae ? "diurnal" : "flat";
+}
+
+function makeResidualSamples(samples,method){
+  return samples
+    .filter(s=>Number.isFinite(baselineForSample(s,method)))
+    .map(s=>({
+      ...s,
+      // v9の教師値：未来気温そのもののΔTではなく、
+      // 「強い基準予報が外す量」だけを学習する。
+      y:s.targetTemp-baselineForSample(s,method)
+    }));
 }
 
 function latestBaselineForecast(latest,steps,method){
-  if(method!=="diurnal") return latest.currentTemp;
-
   const ctx=stationContextCache?.get(latest.station);
-  const prevTargetTs=latest.ts+steps*10*60000-24*60*60*1000;
-  const r=ctx?.map?.get(prevTargetTs);
+  if(!ctx) return latest.currentTemp;
 
-  return Number.isFinite(r?.temperature) ? r.temperature : latest.currentTemp;
+  const targetTs=latest.ts+steps*10*60000;
+  const getTemp=days=>{
+    const r=ctx.map?.get(targetTs-days*24*60*60*1000);
+    return Number.isFinite(r?.temperature) ? r.temperature : NaN;
+  };
+
+  const d1=getTemp(1),d2=getTemp(2),d3=getTemp(3);
+
+  if(method==="diurnal" && Number.isFinite(d1)) return d1;
+  if(method==="median3" && [d1,d2,d3].every(Number.isFinite)){
+    return [d1,d2,d3].sort((a,b)=>a-b)[1];
+  }
+  if(method==="trend3" && [d1,d2,d3].every(Number.isFinite)){
+    return d1 + clampNumber((d1-d3)/4,-1.5,1.5);
+  }
+  return latest.currentTemp;
+}
+
+function optimizeV9BlendAlpha(cases){
+  // 4起点walk-forwardのout-of-sample予測だけで、
+  // baseline + alpha * residualPrediction のalphaを選ぶ。
+  if(!cases?.length) return {alpha:0,mae:NaN};
+  let bestAlpha=0,bestMae=Infinity;
+
+  for(let i=0;i<=20;i++){
+    const alpha=i/20;
+    const e=cases.reduce((sum,c)=>{
+      const p=c.baseline+alpha*c.residualPred;
+      return sum+Math.abs(p-c.actual);
+    },0)/cases.length;
+
+    // 同点なら小さいalphaを残す＝保守的。
+    if(e<bestMae-1e-12){
+      bestMae=e;
+      bestAlpha=alpha;
+    }
+  }
+  return {alpha:bestAlpha,mae:bestMae};
+}
+
+function computeV9ReliabilityProfile(rows){
+  const result=new Map();
+  if(!rows?.length) return result;
+
+  const latestStation=rows.at(-1).station;
+  const ctx=stationContextCache?.get(latestStation);
+  if(!ctx) return result;
+
+  const stationRows=ctx.rows;
+  const firstTs=stationRows[0]?.ts;
+  const latestTs=stationRows.at(-1)?.ts;
+
+  for(const h of DISPLAY_HORIZONS){
+    const samples=buildSamples(rows,h.steps).filter(s=>s.station===latestStation);
+    const sampleByTs=new Map(samples.map(s=>[s.ts,s]));
+
+    const origins=stationRows.filter(r=>{
+      const d=new Date(r.ts);
+      return (
+        [0,6,12,18].includes(d.getHours()) &&
+        d.getMinutes()===0 &&
+        r.ts-firstTs>=7*86400000 &&
+        r.ts+h.minutes*60000<=latestTs &&
+        sampleByTs.has(r.ts)
+      );
+    });
+
+    const cases=[];
+    for(const origin of origins){
+      const s=sampleByTs.get(origin.ts);
+      const rawTrain=prefixSamplesThroughTarget(samples,origin.ts);
+      if(rawTrain.length<300) continue;
+
+      const method=selectBaselineMethodFromTrain(rawTrain);
+      const train=makeResidualSamples(rawTrain,method);
+      if(train.length<300) continue;
+
+      const baseline=baselineForSample(s,method);
+      if(!Number.isFinite(baseline)) continue;
+
+      const model=trainRidgeClosedForm(train,0.8);
+      const residualPred=predictModel(model,s.x);
+      const rawForecast=baseline+residualPred;
+
+      cases.push({
+        originTs:origin.ts,
+        actual:s.targetTemp,
+        baseline,
+        residualPred,
+        rawForecast,
+        baselineMethod:method,
+        rawAbs:Math.abs(rawForecast-s.targetTemp),
+        baseAbs:Math.abs(baseline-s.targetTemp)
+      });
+    }
+
+    if(!cases.length){
+      result.set(h.steps,{ok:false,steps:h.steps,label:h.label});
+      continue;
+    }
+
+    const tuned=optimizeV9BlendAlpha(cases);
+    const rawMae=cases.reduce((s,c)=>s+c.rawAbs,0)/cases.length;
+    const baseMae=cases.reduce((s,c)=>s+c.baseAbs,0)/cases.length;
+    const blendMae=tuned.mae;
+    const rawImprovement=baseMae>0?(baseMae-rawMae)/baseMae*100:0;
+    const blendImprovement=baseMae>0?(baseMae-blendMae)/baseMae*100:0;
+
+    result.set(h.steps,{
+      ok:true,
+      steps:h.steps,
+      label:h.label,
+      cases:cases.length,
+      days:new Set(cases.map(c=>new Date(c.originTs).toISOString().slice(0,10))).size,
+      alpha:tuned.alpha,
+      rawMae,
+      blendMae,
+      baseMae,
+      rawImprovement,
+      blendImprovement
+    });
+  }
+
+  return result;
+}
+
+function v9AlphaForStep(steps){
+  const anchors=DISPLAY_HORIZONS
+    .map(h=>({steps:h.steps,r:v9ReliabilityProfile.get(h.steps)}))
+    .filter(x=>x.r?.ok&&Number.isFinite(x.r.alpha))
+    .map(x=>({steps:x.steps,alpha:x.r.alpha}));
+
+  if(!anchors.length) return NaN;
+  if(steps<=anchors[0].steps) return anchors[0].alpha;
+  if(steps>=anchors.at(-1).steps) return anchors.at(-1).alpha;
+
+  for(let i=1;i<anchors.length;i++){
+    const a=anchors[i-1],b=anchors[i];
+    if(steps<=b.steps){
+      const t=(steps-a.steps)/(b.steps-a.steps);
+      return a.alpha+(b.alpha-a.alpha)*t;
+    }
+  }
+  return anchors.at(-1).alpha;
 }
 
 function trainForHorizon(rows,steps){
@@ -2732,90 +2961,130 @@ function trainForHorizon(rows,steps){
     return {ok:false,samples,error:"検証区間を作れません"};
   }
 
-  // 学習サンプルの「正解時刻」がテスト開始時刻へ食い込まないようにする。
-  const train=samples.filter(s=>s.targetTs < testStartTs);
+  // 学習サンプルの正解時刻が固定holdoutへ食い込まないようpurge。
+  const rawTrain=samples.filter(s=>s.targetTs < testStartTs);
   const test=samples.filter(s=>s.ts >= testStartTs);
 
-  if(train.length<80||test.length<20){
+  if(rawTrain.length<80||test.length<20){
     return {ok:false,samples,error:"検証サンプル不足"};
   }
 
-  // baseline方式はテストを見ず、学習側だけで決定。
-  const baselineMethod=selectBaselineMethodFromTrain(train);
+  // ---- v9 core ----
+  // 1) 評価用baselineは評価trainだけで決める。
+  // 2) ridgeは「未来-現在」ではなく「未来-baseline」の残差を学習。
+  // 3) 現在の未来予測用baselineは、現在までに正解が確定した全履歴だけで再選択する。
+  const evalBaselineMethod=selectBaselineMethodFromTrain(rawTrain);
+  const evalTrain=makeResidualSamples(rawTrain,evalBaselineMethod);
 
-  // v8.5: 評価fitと全量fitを同じ十分統計量走査で同時に作る（exact）。
-  const pair=trainRidgePair(train,samples,0.8);
-  const evalModel=pair.evalModel;
+  if(evalTrain.length<80){
+    return {ok:false,samples,error:"v9残差学習サンプル不足"};
+  }
 
-  // AI未来気温 = 現在気温 + AIが予測したΔT
-  const testDeltaPred=test.map(s=>predictModel(evalModel,s.x));
-  const pred=test.map((s,i)=>s.currentTemp+testDeltaPred[i]);
+  const forecastBaselineMethod=selectBaselineMethodFromTrain(samples);
+  const finalSamples=makeResidualSamples(samples,forecastBaselineMethod);
 
-  const actual=test.map(s=>s.targetTemp);
-  const flatBaseline=test.map(s=>s.currentTemp);
-  const diurnalBaseline=test.map(s=>
-    Number.isFinite(s.diurnalBaseline) ? s.diurnalBaseline : s.currentTemp
-  );
-  const baseline=test.map(s=>baselineForSample(s,baselineMethod));
+  let evalModel,finalModel;
+  if(evalBaselineMethod===forecastBaselineMethod){
+    const pair=trainRidgePair(evalTrain,finalSamples,0.8);
+    evalModel=pair.evalModel;
+    finalModel=pair.finalModel;
+  }else{
+    evalModel=trainRidgeClosedForm(evalTrain,0.8);
+    finalModel=trainRidgeClosedForm(finalSamples,0.8);
+  }
+
+  const evalTest=test.filter(s=>Number.isFinite(baselineForSample(s,evalBaselineMethod)));
+  if(evalTest.length<20){
+    return {ok:false,samples,error:"v9固定holdoutの共通サンプル不足"};
+  }
+
+  const residualPred=evalTest.map(s=>predictModel(evalModel,s.x));
+  const pred=evalTest.map((s,i)=>baselineForSample(s,evalBaselineMethod)+residualPred[i]);
+  const actual=evalTest.map(s=>s.targetTemp);
+  const baseline=evalTest.map(s=>baselineForSample(s,evalBaselineMethod));
+
+  const baselineMaeFor=(method)=>{
+    const z=evalTest
+      .map(s=>({y:s.targetTemp,b:baselineForSample(s,method)}))
+      .filter(v=>Number.isFinite(v.b));
+    return z.length ? z.reduce((sum,v)=>sum+Math.abs(v.y-v.b),0)/z.length : NaN;
+  };
+
+  const flatMae=baselineMaeFor("flat");
+  const diurnalMae=baselineMaeFor("diurnal");
+  const median3Mae=baselineMaeFor("median3");
+  const trend3Mae=baselineMaeFor("trend3");
 
   const modelMae=mae(actual,pred);
-  const flatMae=mae(actual,flatBaseline);
-  const diurnalMae=mae(actual,diurnalBaseline);
   const baseMae=mae(actual,baseline);
   const improvement=baseMae>0?(baseMae-modelMae)/baseMae*100:0;
 
   const latest=buildLatestFeature(rows);
-
   if(!latest || latest.ok===false){
     const missing=latest?.missing?.join("、") || "必要な過去データ";
-
     return {
       ok:false,
       samples,
-      trainCount:train.length,
-      testCount:test.length,
+      trainCount:evalTrain.length,
+      testCount:evalTest.length,
       error:`最新観測 ${latest ? formatDateTime(latest.ts) : ""} では予測不可：${missing} が欠損`
     };
   }
 
-  // 本番予測は全教師データ。pair内で同じ全サンプルから学習済み。
-  const finalModel=pair.finalModel;
+  const baselineForecast=latestBaselineForecast(
+    latest,steps,forecastBaselineMethod
+  );
+  const forecastResidual=predictModel(finalModel,latest.x);
+  const forecast=baselineForecast+forecastResidual;
+  const forecastDelta=forecast-latest.currentTemp;
 
-  const forecastDelta=predictModel(finalModel,latest.x);
-  const forecast=latest.currentTemp+forecastDelta;
+  // v9: hard switchを廃止。
+  // alphaは00/06/12/18の過去walk-forward OOS予測だけで選び、
+  // 代表8horizon間は線形補間する。
+  let alpha=v9AlphaForStep(steps);
+  if(!Number.isFinite(alpha)){
+    // 7日未満などprofileを作れない初期だけの保守fallback。
+    alpha=improvement>=5 ? 1 : improvement>0 ? 0.5 : 0;
+  }
+  alpha=clampNumber(alpha,0,1);
+
+  const adoptedForecast=baselineForecast+alpha*forecastResidual;
+  const adoptedDelta=adoptedForecast-latest.currentTemp;
+  const adoptedMethod=alpha<=0.001
+    ? `v9基準（${baselineLabel(forecastBaselineMethod)}）`
+    : alpha>=0.999
+      ? `v9残差AI α=1.00`
+      : `v9残差blend α=${alpha.toFixed(2)}`;
 
   const contributions=getContributions(finalModel,latest.x);
-
-  const baselineForecast=latestBaselineForecast(latest,steps,baselineMethod);
-
-  // 過去検証でMAEが小さい方式を暫定採用。
-  // baseline自体の方式はtrainだけで選んでいるため、テストを見て基準を都合よく切替えない。
-  const useAI=modelMae<baseMae;
-  const adoptedForecast=useAI ? forecast : baselineForecast;
-  const adoptedMethod=useAI
-    ? "AI（ΔT補正）"
-    : `基準（${baselineLabel(baselineMethod)}）`;
 
   return {
     ok:true,
     steps,
     samples,
-    trainCount:train.length,
-    testCount:test.length,
+    trainCount:evalTrain.length,
+    testCount:evalTest.length,
 
     modelMae,
     baseMae,
     flatMae,
     diurnalMae,
-    baselineMethod,
+    median3Mae,
+    trend3Mae,
+    baselineMethod:evalBaselineMethod,
+    evalBaselineMethod,
+    forecastBaselineMethod,
     improvement,
 
     forecast,
+    forecastResidual,
     forecastDelta,
     baselineForecast,
     adoptedForecast,
+    adoptedDelta,
     adoptedMethod,
-    useAI,
+    reliabilityAlpha:alpha,
+    useAI:alpha>=0.5,
 
     latestTs:latest.ts,
     latestTemp:latest.currentTemp,
@@ -2823,11 +3092,12 @@ function trainForHorizon(rows,steps){
 
     testActual:actual,
     testPred:pred,
-    testDeltaPred,
+    testResidualPred:residualPred,
+    testDeltaPred:pred.map((v,i)=>v-evalTest[i].currentTemp),
     testBase:baseline,
-    testFlatBase:flatBaseline,
-    testDiurnalBase:diurnalBaseline,
-    testTimes:test.map(s=>s.targetTs),
+    testFlatBase:evalTest.map(s=>baselineForSample(s,"flat")),
+    testDiurnalBase:evalTest.map(s=>baselineForSample(s,"diurnal")),
+    testTimes:evalTest.map(s=>s.targetTs),
 
     model:finalModel,
     latestX:latest.x,
@@ -3402,15 +3672,28 @@ function buildSamples(rows,steps){
       }
       if(!sameClockYesterday) sameClockYesterday=map.get(target.ts-24*60*60*1000);
 
+      const sameClock2d=map.get(target.ts-2*24*60*60*1000);
+      const sameClock3d=map.get(target.ts-3*24*60*60*1000);
+      const d1=Number.isFinite(sameClockYesterday?.temperature) ? sameClockYesterday.temperature : NaN;
+      const d2=Number.isFinite(sameClock2d?.temperature) ? sameClock2d.temperature : NaN;
+      const d3=Number.isFinite(sameClock3d?.temperature) ? sameClock3d.temperature : NaN;
+      const d3Median=[d1,d2,d3].every(Number.isFinite)
+        ? [d1,d2,d3].sort((a,b)=>a-b)[1]
+        : NaN;
+      // 3日トレンドは2日間の同時刻変化を半分だけ外挿。暴走防止に±1.5℃/日へclip。
+      const d3Trend=[d1,d2,d3].every(Number.isFinite)
+        ? d1 + clampNumber((d1-d3)/4,-1.5,1.5)
+        : NaN;
+
       out.push({
         x:f,
         y:deltaTemp,
         deltaTemp,
         targetTemp,
         currentTemp:cur.temperature,
-        diurnalBaseline:Number.isFinite(sameClockYesterday?.temperature)
-          ? sameClockYesterday.temperature
-          : NaN,
+        diurnalBaseline:d1,
+        diurnalMedian3:d3Median,
+        diurnalTrend3:d3Trend,
         station:cur.station,
         ts:cur.ts,
         targetTs:target.ts,
@@ -6073,7 +6356,7 @@ function renderDenseForecastTable(){
         `<td>${h.label}</td>`+
         `<td>${r.forecast.toFixed(1)} ℃</td>`+
         `<td>${formatSigned(r.forecastDelta)} ℃</td>`+
-        `<td>${r.baselineForecast.toFixed(1)} ℃ <span class="small">(${baselineLabel(r.baselineMethod)})</span></td>`+
+        `<td>${r.baselineForecast.toFixed(1)} ℃ <span class="small">(${baselineLabel(r.forecastBaselineMethod||r.baselineMethod)})</span></td>`+
         `<td><b>${r.adoptedForecast.toFixed(1)} ℃</b></td>`+
         `<td class="${r.useAI?"goodText":"warnText"}">${r.adoptedMethod}</td>`+
         `<td>${r.modelMae.toFixed(3)} ℃</td>`+
@@ -6095,7 +6378,7 @@ async function runWalkForward(){
 
   try{
     walkForwardResults=new Map();
-    $("walkForwardStatus").textContent="日別walk-forwardを準備中...";
+    $("walkForwardStatus").textContent="v9日別walk-forwardを準備中...";
 
     const latestStation=globalRows.at(-1).station;
     const ctx=stationContextCache?.get(latestStation);
@@ -6105,21 +6388,16 @@ async function runWalkForward(){
     }
 
     const rows=ctx.rows;
-    const map=ctx.map;
     const firstTs=rows[0].ts;
     const latestTs=rows.at(-1).ts;
 
-    // すべての代表時間で同じ日を比較できるよう、
-    // 24時間後まで実測が存在する00:00起点だけを採用する。
     const commonOrigins=rows.filter(r=>{
       const d=new Date(r.ts);
-
       return (
         d.getHours()===0 &&
         d.getMinutes()===0 &&
         r.ts-firstTs>=7*86400000 &&
-        r.ts+24*60*60*1000<=latestTs &&
-        !!makeFeature(r,map)
+        r.ts+24*60*60*1000<=latestTs
       );
     });
 
@@ -6131,48 +6409,45 @@ async function runWalkForward(){
       const h=DISPLAY_HORIZONS[hi];
 
       $("walkForwardStatus").textContent=
-        `日別walk-forward計算中... ${h.label}後 (${hi+1}/${DISPLAY_HORIZONS.length})`;
+        `v9日別walk-forward計算中... ${h.label}後 (${hi+1}/${DISPLAY_HORIZONS.length})`;
       await nextFrame();
 
-      const samples=buildSamples(globalRows,h.steps);
+      const samples=buildSamples(globalRows,h.steps)
+        .filter(s=>s.station===latestStation);
+      const sampleByTs=new Map(samples.map(s=>[s.ts,s]));
       const cases=[];
 
-      for(let oi=0;oi<commonOrigins.length;oi++){
-        const origin=commonOrigins[oi];
-        const target=map.get(origin.ts+h.minutes*60*1000);
+      for(const origin of commonOrigins){
+        const s=sampleByTs.get(origin.ts);
+        if(!s) continue;
 
-        if(!target) continue;
+        // その起点までにtargetが確定済みのsampleだけ。
+        const rawTrain=prefixSamplesThroughTarget(samples,origin.ts);
+        if(rawTrain.length<300) continue;
 
-        // 予報起点の時点で「正解まで既に判明している」過去サンプルだけを使う。
-        const train=prefixSamplesThroughTarget(samples,origin.ts);
-
+        // baseline候補選択もfold trainだけ。
+        const baselineMethod=selectBaselineMethodFromTrain(rawTrain);
+        const train=makeResidualSamples(rawTrain,baselineMethod);
         if(train.length<300) continue;
 
-        const x=makeFeature(origin,map);
-        if(!x) continue;
+        const baseline=baselineForSample(s,baselineMethod);
+        if(!Number.isFinite(baseline)) continue;
 
         const model=trainRidgeClosedForm(train,0.8);
-        const delta=predictModel(model,x);
-        const ai=origin.temperature+delta;
-        const actual=target.temperature;
-
-        // baseline方式もfoldのtrainだけで決定する。
-        const baselineMethod=selectBaselineMethodFromTrain(train);
-        const prevTarget=map.get(target.ts-24*60*60*1000);
-        const diurnal=Number.isFinite(prevTarget?.temperature) ? prevTarget.temperature : NaN;
-        const baseline=baselineMethod==="diurnal" && Number.isFinite(diurnal)
-          ? diurnal
-          : origin.temperature;
+        const residualPrediction=predictModel(model,s.x);
+        const ai=baseline+residualPrediction;
+        const actual=s.targetTemp;
 
         const aiError=ai-actual;
         const baseError=baseline-actual;
 
         cases.push({
           originTs:origin.ts,
-          targetTs:target.ts,
-          originTemp:origin.temperature,
+          targetTs:s.targetTs,
+          originTemp:s.currentTemp,
           actual,
           ai,
+          residualPrediction,
           baseline,
           baselineMethod,
           aiError,
@@ -6226,9 +6501,9 @@ async function runWalkForward(){
     const elapsed=(performance.now()-started)/1000;
 
     $("walkForwardStatus").textContent=
-      `完了：日別walk-forward ${commonOrigins.length}日分 × 代表8時間\n`+
-      `各日00:00時点までの情報だけで再学習\n`+
-      `基準予報は各foldの学習期間だけで「現在値固定 / 前日同時刻」を選択\n`+
+      `完了：v9日別walk-forward ${commonOrigins.length}日分 × 代表8時間\n`+
+      `各日00:00時点までの情報だけでbaseline選択＋residual ridgeを再学習\n`+
+      `ここではcore residual AI（alpha=1）を基準予報と比較。productionのalphaは別の4起点OOSから決定\n`+
       `計算時間 ${elapsed.toFixed(2)}秒\n`+
       `※通常144本予報とは別計算。毎回自動では実行しません。`;
 
@@ -6236,6 +6511,7 @@ async function runWalkForward(){
     $("walkForwardStatus").textContent="エラー\n"+e.message;
   }
 }
+
 
 function renderWalkForwardSummary(){
   const body=$("walkForwardSummaryBody");
@@ -6307,6 +6583,30 @@ function renderWalkForwardDetail(){
   }
 }
 
+function renderV9ReliabilityProfile(){
+  const body=$("v9ReliabilityBody");
+  if(!body) return;
+  body.innerHTML="";
+
+  for(const h of DISPLAY_HORIZONS){
+    const r=v9ReliabilityProfile.get(h.steps);
+    const tr=document.createElement("tr");
+    if(!r?.ok){
+      tr.innerHTML=`<td>${h.label}</td><td colspan="6">検証ケース不足</td>`;
+    }else{
+      tr.innerHTML=
+        `<td>${h.label}</td>`+
+        `<td>${r.cases}</td>`+
+        `<td>${r.baseMae.toFixed(3)} ℃</td>`+
+        `<td>${r.rawMae.toFixed(3)} ℃</td>`+
+        `<td><b>${r.alpha.toFixed(2)}</b></td>`+
+        `<td>${r.blendMae.toFixed(3)} ℃</td>`+
+        `<td class="${r.blendImprovement>=0?"goodText":"badText"}">${r.blendImprovement.toFixed(1)} %</td>`;
+    }
+    body.appendChild(tr);
+  }
+}
+
 function renderMetrics(){
   const body=$("metricsBody");
   body.innerHTML="";
@@ -6323,7 +6623,7 @@ function renderMetrics(){
       tr.innerHTML=
         `<td>${h.label}</td>`+
         `<td>${r.forecast.toFixed(1)} ℃ <span class="small">(${formatSigned(r.forecastDelta)}℃)</span></td>`+
-        `<td>${r.baselineForecast.toFixed(1)} ℃ <span class="small">(${baselineLabel(r.baselineMethod)})</span></td>`+
+        `<td>${r.baselineForecast.toFixed(1)} ℃ <span class="small">(${baselineLabel(r.forecastBaselineMethod||r.baselineMethod)})</span></td>`+
         `<td><b>${r.adoptedForecast.toFixed(1)} ℃</b></td>`+
         `<td>${r.modelMae.toFixed(3)} ℃</td>`+
         `<td>${r.baseMae.toFixed(3)} ℃</td>`+
@@ -6360,7 +6660,7 @@ function renderForecastCards(){
         `<div class="small ${methodClass}">採用：${r.adoptedMethod}</div>`+
         `<div class="temp">${r.adoptedForecast.toFixed(1)} ℃</div>`+
         `<div class="sub">AI ${r.forecast.toFixed(1)}℃（ΔT ${formatSigned(r.forecastDelta)}℃）</div>`+
-        `<div class="sub">基準 ${r.baselineForecast.toFixed(1)}℃（${baselineLabel(r.baselineMethod)}）</div>`+
+        `<div class="sub">基準 ${r.baselineForecast.toFixed(1)}℃（${baselineLabel(r.forecastBaselineMethod||r.baselineMethod)}）</div>`+
         `<div class="sub">起点 ${formatShort(r.latestTs)} / ${r.latestTemp.toFixed(1)}℃</div>`+
         `<div class="sub ${r.improvement>=0?"goodText":"badText"}">AI MAE ${r.modelMae.toFixed(2)}℃ / 基準 ${r.baseMae.toFixed(2)}℃</div>`;
     }
@@ -6423,7 +6723,7 @@ function renderSelectedBacktest(){
     {label:"基準",points:mk(r.testBase),color:"#9ca8ba",width:1.8,dash:[5,5]}
   ]);
   $("backtestTitle").textContent=
-    `${h.label}後：AI MAE ${r.modelMae.toFixed(3)}℃ / 基準 ${r.baseMae.toFixed(3)}℃（${baselineLabel(r.baselineMethod)}） / `+
+    `${h.label}後：v9 residual AI MAE ${r.modelMae.toFixed(3)}℃ / 基準 ${r.baseMae.toFixed(3)}℃（${baselineLabel(r.evalBaselineMethod||r.baselineMethod)}） / `+
     `暫定採用 ${r.adoptedMethod} / テスト ${r.testCount}件`;
 }
 
@@ -6438,23 +6738,35 @@ function renderExplanation(){
     return;
   }
 
-  const meanDelta=r.model.yMean;
+  const meanResidual=r.model.yMean;
   const contributionSum=r.contributions.reduce((s,x)=>s+x.contribution,0);
-  const reconstructedDelta=meanDelta+contributionSum;
-  const reconstructedTemp=r.latestTemp+reconstructedDelta;
+  const reconstructedResidual=meanResidual+contributionSum;
+  const reconstructedTemp=r.baselineForecast+reconstructedResidual;
+
+  const candidateText=[
+    ["現在値固定",r.flatMae],
+    ["前日同時刻",r.diurnalMae],
+    ["3日中央値",r.median3Mae],
+    ["3日トレンド",r.trend3Mae]
+  ].filter(x=>Number.isFinite(x[1]))
+   .map(x=>`${x[0]} ${x[1].toFixed(3)}℃`)
+   .join(" / ");
 
   $("formula").innerHTML=
     `<b>${h.label}後</b><br>`+
-    `現在気温 <code>${r.latestTemp.toFixed(2)}℃</code>`+
-    ` ＋ 学習データの平均ΔT <code>${formatSigned(meanDelta)}℃</code>`+
-    ` ＋ 入力要素の補正 <code>${formatSigned(contributionSum)}℃</code>`+
-    ` ＝ AI予測 <code>${reconstructedTemp.toFixed(2)}℃</code><br>`+
-    `<b>AI予測ΔT：<code>${formatSigned(r.forecastDelta)}℃</code></b><br>`+
-    `基準予報 <code>${r.baselineForecast.toFixed(2)}℃（${baselineLabel(r.baselineMethod)}）</code> / `+
-    `採用予報 <code>${r.adoptedForecast.toFixed(2)}℃（${r.adoptedMethod}）</code><br>`+
-    `<span class="small">基準候補の検証MAE：現在値固定 ${r.flatMae.toFixed(3)}℃ / 前日同時刻 ${r.diurnalMae.toFixed(3)}℃。基準方式は学習側だけで選択。</span><br>`+
+    `本番基準 <code>${r.baselineForecast.toFixed(2)}℃（${baselineLabel(r.forecastBaselineMethod)}）</code>`+
+    ` ＋ 学習データの平均残差 <code>${formatSigned(meanResidual)}℃</code>`+
+    ` ＋ 入力要素の残差補正 <code>${formatSigned(contributionSum)}℃</code>`+
+    ` ＝ full residual AI <code>${reconstructedTemp.toFixed(2)}℃</code><br>`+
+    `<b>v9採用：</b>基準 ＋ α <code>${r.reliabilityAlpha.toFixed(2)}</code>`+
+    ` × AI残差 <code>${formatSigned(r.forecastResidual)}℃</code>`+
+    ` ＝ <code>${r.adoptedForecast.toFixed(2)}℃</code><br>`+
+    `現在気温 <code>${r.latestTemp.toFixed(2)}℃</code> / full AIの現在比 <code>${formatSigned(r.forecastDelta)}℃</code>`+
+    ` / 採用の現在比 <code>${formatSigned(r.adoptedDelta)}℃</code><br>`+
+    `<span class="small">固定holdout評価ではbaseline=${baselineLabel(r.evalBaselineMethod)}。候補MAE：${candidateText}</span><br>`+
+    `<span class="small">αは現在までの00/06/12/18 walk-forward out-of-sample予測だけで選択し、代表8 horizonの間を線形補間。</span><br>`+
     `<span class="small">予測起点：${formatDateTime(r.latestTs)} / ${r.latestTemp.toFixed(1)}℃</span><br>`+
-    `<span class="small">寄与はすべて「未来気温そのもの」ではなく、現在気温からの補正量 ΔT に対する寄与です。</span>`;
+    `<span class="small">寄与は「未来気温そのもの」でも「現在からのΔT」でもなく、選ばれた基準予報からの残差に対する寄与です。</span>`;
 
   $("contribBody").innerHTML=r.contributions.map(c=>
     `<tr>`+
@@ -6464,6 +6776,7 @@ function renderExplanation(){
     `</tr>`
   ).join("");
 }
+
 
 function drawTimeChart(canvas,series,extra={}){
   const ctx=canvas.getContext("2d"),W=canvas.width,H=canvas.height,p={l:58,r:20,t:24,b:42};
