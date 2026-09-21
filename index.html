@@ -1,9 +1,9 @@
-　<!doctype html>
+<!doctype html>
 <html lang="ja">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Weather Forecast Lab v8.5</title>
+<title>Weather Forecast Lab v8.6 Spatial-2</title>
 <style>
 :root{
   --bg:#0b1020;
@@ -138,10 +138,10 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
 <div class="wrap">
   <div class="hero">
     <div>
-      <h1>Weather Forecast Lab <span style="font-size:.38em;color:var(--muted)">v8.5</span></h1>
+      <h1>Weather Forecast Lab <span style="font-size:.38em;color:var(--muted)">v8.6 Spatial-2</span></h1>
       <p>10分値を主軸に、1時間補助観測を時間リークなしで結合し、ΔTモデルを比較検証するブラウザ完結型ダッシュボード</p>
     </div>
-    <div class="badge">v8.5 / exact高速化 + 降水診断 + 連続性監査 + A/B実験</div>
+    <div class="badge">v8.6 / v8.5 exact高速化 + 神戸Spatial-2 A/B + 降水診断</div>
   </div>
 
   <div class="grid">
@@ -260,6 +260,48 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
       </div>
     </section>
 
+
+
+    <section class="panel">
+      <h2>周辺地点 Spatial-2（実験）</h2>
+      <div class="small">
+        予報対象は主地点（現在は大阪）のまま。周辺地点は未来を予測する対象ではなく、
+        <b>同時刻までに得られた10分観測だけを補助特徴量</b>として使います。
+        第一段階は神戸10分値のみ。1時間補助観測はまだ混ぜません。
+      </div>
+
+      <details open style="margin-top:10px">
+        <summary style="cursor:pointer;font-weight:700">補助地点：神戸</summary>
+
+        <div class="row" style="margin-top:10px">
+          <div><label>補助地点名</label><input id="spatialStation" type="text" value="神戸"></div>
+          <div><label>今日入力の日付</label><input id="spatialDate" type="date"></div>
+        </div>
+
+        <label style="margin-top:8px">今日の神戸10分値（任意）</label>
+        <textarea id="spatialRaw" style="min-height:170px" placeholder="神戸の10分ごとの値を表のまま貼り付け"></textarea>
+
+        <div class="actions">
+          <button id="spatialClipboard">クリップボードから取込</button>
+          <button id="spatialConvert">神戸TSV化</button>
+          <button id="spatialDownloadCurrent">今日の神戸TSV保存</button>
+        </div>
+
+        <div id="spatialDrop" class="drop" style="margin-top:12px">
+          過去の神戸10分TSVをまとめてドロップ<br>
+          <span class="small">大阪とは別レイヤーで読み込みます</span>
+        </div>
+        <input id="spatialHistoryFiles" type="file" accept=".tsv,.txt" multiple style="margin-top:10px">
+
+        <div class="actions">
+          <button id="spatialClearFiles" class="danger">神戸TSVを全解除</button>
+          <button id="runSpatialAblation" class="primary">大阪 vs 大阪＋神戸を比較</button>
+          <button id="runSpatialWalkForward" class="ghost">4起点Spatial walk-forward</button>
+        </div>
+        <div id="spatialFileList" class="file-list"></div>
+        <div id="spatialStatus" class="status">神戸データは未読込です。</div>
+      </details>
+    </section>
 
     <section class="panel full">
       <h2>データ状況</h2>
@@ -545,6 +587,60 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
       </div>
     </section>
 
+
+    <section class="panel full">
+      <h2>Spatial-2：大阪＋神戸 A/B</h2>
+      <div class="small">
+        <b>S0</b>=大阪51特徴量、
+        <b>S1</b>=S0＋神戸現在8特徴、
+        <b>S2</b>=S1＋神戸短時間変化6特徴（合計65）。
+        3構成は必ず<b>神戸S2まで揃った同一サンプル</b>だけで比較します。
+        神戸欠測を理由にS0だけ有利な期間を使うことはありません。
+      </div>
+      <div id="spatialDiagnosticSummary" class="status">未実行です。</div>
+
+      <h3>固定時系列holdout：同一サンプル比較</h3>
+      <div class="table-wrap" style="max-height:430px">
+        <table>
+          <thead>
+            <tr>
+              <th>予測先</th><th>共通sample</th><th>train</th><th>test</th>
+              <th>S0 大阪</th><th>S1 +神戸現在</th><th>S2 +神戸変化</th>
+              <th>最良</th><th>S2のS0比</th>
+              <th>最新S0</th><th>最新S1</th><th>最新S2</th>
+            </tr>
+          </thead>
+          <tbody id="spatialHoldoutBody"><tr><td colspan="12">未実行</td></tr></tbody>
+        </table>
+      </div>
+
+      <h3>00/06/12/18 walk-forward</h3>
+      <div class="small">
+        各foldはその予報起点までにtargetが確定した共通sampleだけで再学習。
+        神戸の同時刻観測が欠けた起点はケースから外します。
+      </div>
+      <div class="table-wrap" style="max-height:430px">
+        <table>
+          <thead>
+            <tr>
+              <th>予測先</th><th>ケース</th><th>日数</th>
+              <th>S0 MAE</th><th>S1 MAE</th><th>S2 MAE</th><th>最良</th>
+              <th>S1改善</th><th>S2改善</th><th>S1日勝率</th><th>S2日勝率</th>
+            </tr>
+          </thead>
+          <tbody id="spatialWalkForwardBody"><tr><td colspan="11">未実行</td></tr></tbody>
+        </table>
+      </div>
+
+      <h3>起点時刻別（Spatial − S0）</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>予測先</th><th>構成</th><th>00時</th><th>06時</th><th>12時</th><th>18時</th></tr></thead>
+          <tbody id="spatialOriginBody"><tr><td colspan="6">未実行</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
     <section class="panel full">
       <h2>時間別の精度</h2>
       <div class="table-wrap">
@@ -736,7 +832,7 @@ const FEATURE_NAMES = [
 ];
 
 
-const PARSER_VERSION = "8.5.0";
+const PARSER_VERSION = "8.6.0";
 
 // 1時間値のうち、v8.4 A/Bで使う特徴群。
 // raw/normalized層では露点・蒸気圧・視程・天気等も保持する。
@@ -761,6 +857,32 @@ const AUX_FEATURE_NAMES = {
     "補助:雲量特殊表記フラグ"
   ]
 };
+
+
+// v8.6 Spatial-2：主地点（大阪）を神戸10分観測で補強する実験。
+// S0/S1/S2は必ずS2まで揃う同一sample cohortで比較する。
+const SPATIAL_VARIANTS = [
+  {id:"S0",label:"S0 大阪51",extra:0},
+  {id:"S1",label:"S1 +神戸現在",extra:8},
+  {id:"S2",label:"S2 +神戸変化",extra:14}
+];
+
+const SPATIAL_FEATURE_NAMES = [
+  "神戸:気温",
+  "神戸:湿度",
+  "神戸:海面気圧",
+  "神戸:現在降水中",
+  "神戸:平均風速",
+  "神戸:平均風 東西成分",
+  "神戸:平均風 南北成分",
+  "神戸:現在日照",
+  "神戸:気温30分変化",
+  "神戸:気温1時間変化",
+  "神戸:湿度1時間変化",
+  "神戸:海面気圧30分変化",
+  "神戸:海面気圧1時間変化",
+  "神戸:風速1時間変化"
+];
 
 // 変数ごとの時間意味論。
 // 「行が12:00だから全部12:00瞬間値」にはしない。
@@ -821,6 +943,18 @@ let multiForecastResults = new Map();
 let multiForecastRunning = false;
 let auxWalkForwardRunning = false;
 let auxAblationRunning = false;
+
+// v8.6 Spatial-2 state
+let stagedSpatialFiles = [];
+let currentSpatialRows = [];
+let currentSpatialTsv = "";
+let globalSpatialRows = [];
+let spatialMap = new Map();
+let spatialDiagnostics = [];
+let spatialHoldoutResults = [];
+let spatialWalkForwardResults = [];
+let spatialAblationRunning = false;
+let spatialWalkForwardRunning = false;
 
 
 setToday();
@@ -1026,6 +1160,84 @@ $("hourlyDownloadCurrent").addEventListener("click", () => {
   }
 });
 
+
+$("spatialHistoryFiles").addEventListener("change", e => {
+  stagedSpatialFiles=uniqueFiles([...stagedSpatialFiles,...e.target.files]);
+  renderSpatialFileList();
+  invalidateSpatialResults("神戸ファイルが変更されました。Spatial比較を再実行してください。");
+});
+
+$("spatialDrop").addEventListener("dragover", e => {
+  e.preventDefault(); $("spatialDrop").classList.add("drag");
+});
+$("spatialDrop").addEventListener("dragleave", () => $("spatialDrop").classList.remove("drag"));
+$("spatialDrop").addEventListener("drop", e => {
+  e.preventDefault(); $("spatialDrop").classList.remove("drag");
+  const files=[...e.dataTransfer.files].filter(f=>/\.(tsv|txt)$/i.test(f.name));
+  stagedSpatialFiles=uniqueFiles([...stagedSpatialFiles,...files]);
+  renderSpatialFileList();
+  invalidateSpatialResults("神戸ファイルが変更されました。Spatial比較を再実行してください。");
+});
+
+$("spatialClearFiles").addEventListener("click", () => {
+  stagedSpatialFiles=[];
+  $("spatialHistoryFiles").value="";
+  renderSpatialFileList();
+  invalidateSpatialResults("神戸TSVを解除しました。");
+});
+
+$("spatialRaw").addEventListener("input", () => {
+  currentSpatialRows=[];
+  currentSpatialTsv="";
+  invalidateSpatialResults("今日の神戸入力が変更されました。");
+});
+
+$("spatialStation").addEventListener("input", () => {
+  currentSpatialRows=[];
+  currentSpatialTsv="";
+  invalidateSpatialResults("補助地点名が変更されました。");
+});
+
+$("spatialDate").addEventListener("change", () => {
+  currentSpatialRows=[];
+  currentSpatialTsv="";
+  invalidateSpatialResults("神戸の日付が変更されました。");
+});
+
+$("spatialClipboard").addEventListener("click", async () => {
+  try{
+    const t=await navigator.clipboard.readText();
+    if(!t.trim()) throw new Error("クリップボードが空です。");
+    $("spatialRaw").value=t;
+    currentSpatialRows=[];
+    currentSpatialTsv="";
+    invalidateSpatialResults("クリップボードから神戸10分値を取り込みました。");
+  }catch(e){
+    $("spatialStatus").textContent="クリップボードを読み取れません。\n"+e.message;
+  }
+});
+
+$("spatialConvert").addEventListener("click", () => {
+  try{
+    const q=convertSpatialRaw();
+    $("spatialStatus").textContent=`神戸TSV化完了：${q.rows.length}行`;
+  }catch(e){
+    $("spatialStatus").textContent="神戸TSV化エラー\n"+e.message;
+  }
+});
+
+$("spatialDownloadCurrent").addEventListener("click", () => {
+  try{
+    const q=convertSpatialRaw();
+    const date=$("spatialDate").value.trim();
+    const station=$("spatialStation").value.trim();
+    download(`${date}_${safeFileName(station)}.tsv`,q.tsv,"text/tab-separated-values;charset=utf-8");
+    $("spatialStatus").textContent=`今日の補助地点TSVを保存しました。\n${date}_${station}.tsv`;
+  }catch(e){
+    $("spatialStatus").textContent="保存エラー\n"+e.message;
+  }
+});
+
 $("downloadHourlyMerged").addEventListener("click", () => {
   try{
     if(!globalHourlyRows.length) throw new Error("1時間補助データがありません。");
@@ -1059,6 +1271,8 @@ $("run").addEventListener("click", runAll);
 $("walkForwardBtn").addEventListener("click", runWalkForward);
 $("runAuxAblation").addEventListener("click", runAuxAblation);
 $("runAuxWalkForward").addEventListener("click", runAuxWalkForward);
+$("runSpatialAblation").addEventListener("click", runSpatialAblation);
+$("runSpatialWalkForward").addEventListener("click", runSpatialWalkForward);
 $("runMultiForecast").addEventListener("click", runMultiForecast);
 $("multiMetricSelect").addEventListener("change", () => {
   drawMultiForecastChart();
@@ -1070,8 +1284,9 @@ $("explainHorizon").addEventListener("change", renderExplanation);
 
 function setToday(){
   const d=new Date();
-  $("date").value =
-    `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  const v=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  $("date").value=v;
+  if($("spatialDate")) $("spatialDate").value=v;
 }
 
 function uniqueFiles(files){
@@ -1091,6 +1306,56 @@ function renderHourlyFileList(){
   $("hourlyFileList").innerHTML = stagedHourlyFiles.length
     ? stagedHourlyFiles.map(f=>`<div class="file-item"><span>${escapeHtml(f.name)}</span><span>${formatBytes(f.size)}</span></div>`).join("")
     : `<div class="small">未選択</div>`;
+}
+
+
+function renderSpatialFileList(){
+  $("spatialFileList").innerHTML=stagedSpatialFiles.length
+    ? stagedSpatialFiles.map(f=>`<div class="file-item"><span>${escapeHtml(f.name)}</span><span>${formatBytes(f.size)}</span></div>`).join("")
+    : `<div class="small">未選択</div>`;
+}
+
+function invalidateSpatialResults(message="Spatial比較を再実行してください。"){
+  globalSpatialRows=[];
+  spatialMap=new Map();
+  spatialDiagnostics=[];
+  spatialHoldoutResults=[];
+  spatialWalkForwardResults=[];
+  if($("spatialHoldoutBody")) $("spatialHoldoutBody").innerHTML='<tr><td colspan="12">未実行</td></tr>';
+  if($("spatialWalkForwardBody")) $("spatialWalkForwardBody").innerHTML='<tr><td colspan="11">未実行</td></tr>';
+  if($("spatialOriginBody")) $("spatialOriginBody").innerHTML='<tr><td colspan="6">未実行</td></tr>';
+  if($("spatialDiagnosticSummary")) $("spatialDiagnosticSummary").textContent="未実行です。";
+  if($("spatialStatus")) $("spatialStatus").textContent=message;
+}
+
+function convertSpatialRaw(){
+  const date=$("spatialDate").value.trim();
+  const station=$("spatialStation").value.trim();
+  const raw=$("spatialRaw").value;
+  if(!date) throw new Error("神戸側の日付を入力してください。");
+  if(!station) throw new Error("補助地点名を入力してください。");
+  if(!raw.trim()) throw new Error("神戸の生データを貼り付けてください。");
+
+  const lines=normalizeNewlines(raw).split("\n");
+  const timePattern=/^(?:[01]\d|2[0-3]):[0-5]\d$|^24:00$/;
+  const source=[];
+
+  for(const original of lines){
+    const line=original.trim();
+    if(!line) continue;
+    const parts=line.split(/\s+/);
+    if(!timePattern.test(parts[0])) continue;
+    if(parts.length===10) parts.push("");
+    if(parts.length!==11){
+      throw new Error(`神戸側で列数を認識できない行があります。\n${original}\n認識列数: ${parts.length}`);
+    }
+    source.push(parts);
+  }
+
+  if(!source.length) throw new Error("神戸の観測行を認識できません。");
+  currentSpatialRows=source.map(r=>rawRowToObject(date,station,r)).filter(Boolean);
+  currentSpatialTsv=tenMinuteRowsToTsv(currentSpatialRows);
+  return {rows:currentSpatialRows,tsv:currentSpatialTsv};
 }
 
 function getHourlyAvailabilityLag(){
@@ -1966,6 +2231,12 @@ async function runAll(){
 
       auxAblationResults=[];
       auxWalkForwardResults=[];
+      spatialHoldoutResults=[];
+      spatialWalkForwardResults=[];
+      if($("spatialHoldoutBody")) $("spatialHoldoutBody").innerHTML='<tr><td colspan="12">未実行</td></tr>';
+      if($("spatialWalkForwardBody")) $("spatialWalkForwardBody").innerHTML='<tr><td colspan="11">未実行</td></tr>';
+      if($("spatialOriginBody")) $("spatialOriginBody").innerHTML='<tr><td colspan="6">未実行</td></tr>';
+      if($("spatialStatus")) $("spatialStatus").textContent="主地点データが更新されました。Spatial比較を再実行してください。";
       multiForecastResults=new Map();
       $("multiForecastBody").innerHTML='<tr><td colspan="15">未実行</td></tr>';
       $("multiMetricsBody").innerHTML='<tr><td colspan="6">未実行</td></tr>';
@@ -3357,6 +3628,564 @@ function trainRidgeClosedFormLegacy(samples,lambda){
   return {weights,xMean,xStd,yMean,yStd};
 }
 
+
+
+// ---------------- v8.6 Spatial-2: 大阪 + 神戸 ----------------
+
+function spatialVariantP(id){
+  const v=SPATIAL_VARIANTS.find(x=>x.id===id) || SPATIAL_VARIANTS[0];
+  return FEATURE_NAMES.length+v.extra;
+}
+
+function spatialRainOccurrence(r){
+  return r?.precipOccurred===1 ||
+    (r?.precipOccurred==null && Number.isFinite(r?.precip) && r.precip>0);
+}
+
+function spatialExtraAt(ts,variantId="S2"){
+  const cur=spatialMap.get(ts);
+  if(!cur) return null;
+  if(Number.isFinite(cur.availableAt) && cur.availableAt>ts) return null;
+
+  const base=[
+    cur.temperature,
+    cur.humidity,
+    cur.pressure,
+    spatialRainOccurrence(cur)?1:0,
+    cur.wind,
+    cur.windEast,
+    cur.windNorth,
+    cur.sunshine
+  ];
+  if(!base.every(Number.isFinite)) return null;
+  if(variantId==="S1") return base;
+
+  const l30=spatialMap.get(ts-30*60000);
+  const l60=spatialMap.get(ts-60*60000);
+  if(!l30||!l60) return null;
+  if(
+    (Number.isFinite(l30.availableAt)&&l30.availableAt>ts) ||
+    (Number.isFinite(l60.availableAt)&&l60.availableAt>ts)
+  ) return null;
+
+  const change=[
+    cur.temperature-l30.temperature,
+    cur.temperature-l60.temperature,
+    cur.humidity-l60.humidity,
+    cur.pressure-l30.pressure,
+    cur.pressure-l60.pressure,
+    cur.wind-l60.wind
+  ];
+  if(!change.every(Number.isFinite)) return null;
+  return [...base,...change];
+}
+
+function buildSpatialOriginX(origin,map,variantId){
+  const b=makeFeature(origin,map);
+  if(!b) return null;
+  if(variantId==="S0") return b;
+  const extra=spatialExtraAt(origin.ts,variantId);
+  if(!extra) return null;
+  return [...b,...extra];
+}
+
+function buildSpatialCommonSamples(steps){
+  if(!globalRows.length || !globalSpatialRows.length) return [];
+  const targetStation=globalRows.at(-1).station;
+  const base=buildSamples(globalRows,steps).filter(s=>s.station===targetStation);
+  const out=[];
+  for(const s of base){
+    const extra=spatialExtraAt(s.ts,"S2");
+    if(!extra) continue;
+    const x=[...s.x,...extra];
+    if(x.length!==FEATURE_NAMES.length+SPATIAL_FEATURE_NAMES.length) continue;
+    if(!x.every(Number.isFinite)) continue;
+    out.push({...s,xSpatial:x});
+  }
+  return out.sort((a,b)=>a.ts-b.ts);
+}
+
+function createSpatialStats(p=FEATURE_NAMES.length+SPATIAL_FEATURE_NAMES.length){
+  return {
+    p,n:0,
+    sumX:new Float64Array(p),
+    sumXX:new Float64Array(p*p),
+    sumXY:new Float64Array(p),
+    sumY:0,sumY2:0
+  };
+}
+
+function addSpatialStat(st,sample){
+  const x=sample.xSpatial;
+  const y=sample.y;
+  const p=st.p;
+  st.n++;
+  st.sumY+=y;
+  st.sumY2+=y*y;
+  for(let j=0;j<p;j++){
+    const xj=x[j];
+    st.sumX[j]+=xj;
+    st.sumXY[j]+=xj*y;
+    const row=j*p;
+    for(let k=j;k<p;k++) st.sumXX[row+k]+=xj*x[k];
+  }
+}
+
+function cloneSpatialStats(st){
+  return {
+    p:st.p,n:st.n,
+    sumX:Float64Array.from(st.sumX),
+    sumXX:Float64Array.from(st.sumXX),
+    sumXY:Float64Array.from(st.sumXY),
+    sumY:st.sumY,sumY2:st.sumY2
+  };
+}
+
+function spatialModelFromStats(st,prefixP,lambda=0.8){
+  const n=st.n;
+  if(n<2) return null;
+  const p=prefixP;
+  const xMean=Array(p).fill(0),xStd=Array(p).fill(1);
+  for(let j=0;j<p;j++) xMean[j]=st.sumX[j]/n;
+
+  for(let j=0;j<p;j++){
+    const ss=st.sumXX[j*st.p+j]-st.sumX[j]*st.sumX[j]/n;
+    const sd=Math.sqrt(Math.max(0,ss/n));
+    xStd[j]=Number.isFinite(sd)&&sd>=1e-9?sd:1;
+  }
+
+  const yMean=st.sumY/n;
+  let yStd=Math.sqrt(Math.max(0,(st.sumY2-st.sumY*st.sumY/n)/n));
+  if(!Number.isFinite(yStd)||yStd<1e-9) yStd=1;
+
+  const A=Array.from({length:p},()=>Array(p).fill(0));
+  const b=Array(p).fill(0);
+
+  for(let j=0;j<p;j++){
+    b[j]=(st.sumXY[j]-st.sumX[j]*st.sumY/n)/(xStd[j]*yStd);
+    for(let k=j;k<p;k++){
+      const centered=st.sumXX[j*st.p+k]-st.sumX[j]*st.sumX[k]/n;
+      const v=centered/(xStd[j]*xStd[k]);
+      A[j][k]=v;
+      A[k][j]=v;
+    }
+    A[j][j]+=lambda*n;
+  }
+
+  const weights=solveSpdCholesky(A,b) || solveLinearSystem(A,b);
+  return {weights,xMean,xStd,yMean,yStd,spatialExact:true};
+}
+
+function predictSpatialModel(model,x){
+  let z=0;
+  for(let j=0;j<model.weights.length;j++){
+    z+=model.weights[j]*((x[j]-model.xMean[j])/model.xStd[j]);
+  }
+  return model.yMean+model.yStd*z;
+}
+
+async function loadSpatialData(){
+  if(!globalRows.length || !modelResults.size){
+    throw new Error("先に大阪側の「統合・学習・多時間予測」を実行してください。");
+  }
+
+  const expected=$("spatialStation").value.trim();
+  if(!expected) throw new Error("補助地点名を入力してください。");
+
+  const preferFilenameDate=$("preferFilenameDate").checked;
+  const all=[];
+  spatialDiagnostics=[];
+
+  for(const file of stagedSpatialFiles){
+    const t=await file.text();
+    const d=inspectTsvSource(file.name,t);
+    const rows=parseTsvRows(
+      t,
+      preferFilenameDate ? d.filenameDate : null,
+      file.name
+    );
+    const stations=[...new Set(rows.map(r=>r.station).filter(Boolean))];
+    const accepted=rows.filter(r=>r.station===expected);
+    spatialDiagnostics.push({
+      file:file.name,
+      rowCount:rows.length,
+      accepted:accepted.length,
+      stations
+    });
+    all.push(...accepted);
+  }
+
+  let currentIncluded=false;
+  if($("spatialRaw").value.trim()){
+    const q=convertSpatialRaw();
+    all.push(...q.rows);
+    currentIncluded=true;
+    spatialDiagnostics.push({
+      file:"今日の補助地点入力",
+      rowCount:q.rows.length,
+      accepted:q.rows.length,
+      stations:[expected]
+    });
+  }
+
+  if(!all.length){
+    throw new Error(`${expected}の10分TSVがありません。過去TSVを選択するか、今日の値を貼り付けてください。`);
+  }
+
+  const before=all.length;
+  globalSpatialRows=deduplicateRows(all)
+    .filter(r=>r.station===expected)
+    .sort((a,b)=>a.ts-b.ts);
+  const duplicateCount=before-globalSpatialRows.length;
+  spatialMap=new Map(globalSpatialRows.map(r=>[r.ts,r]));
+
+  const targetStation=globalRows.at(-1).station;
+  const targetCtx=stationContextCache?.get(targetStation);
+  if(!targetCtx) throw new Error("主地点の時系列を取得できません。");
+  const targetRows=targetCtx.rows;
+
+  const exact=targetRows.filter(r=>spatialMap.has(r.ts)).length;
+  const s2Ready=targetRows.filter(r=>spatialExtraAt(r.ts,"S2")).length;
+  let gaps=0,maxGap=10;
+  for(let i=1;i<globalSpatialRows.length;i++){
+    const dm=(globalSpatialRows[i].ts-globalSpatialRows[i-1].ts)/60000;
+    if(dm>10){gaps++;maxGap=Math.max(maxGap,dm);}
+  }
+
+  const first=Math.max(targetRows[0].ts,globalSpatialRows[0].ts);
+  const last=Math.min(targetRows.at(-1).ts,globalSpatialRows.at(-1).ts);
+  const commonRows=targetRows.filter(r=>r.ts>=first&&r.ts<=last);
+  const exactCommon=commonRows.filter(r=>spatialMap.has(r.ts)).length;
+  const syncRate=commonRows.length?exactCommon/commonRows.length*100:0;
+  const latestAge=(targetRows.at(-1).ts-globalSpatialRows.at(-1).ts)/60000;
+
+  const wrongFiles=spatialDiagnostics.filter(d=>!d.accepted);
+  const mixedFiles=spatialDiagnostics.filter(d=>d.stations.some(s=>s!==expected));
+
+  $("spatialDiagnosticSummary").textContent=
+    `主地点 ${targetStation} / 補助地点 ${expected}\n`+
+    `${expected} ${globalSpatialRows.length.toLocaleString()}行 / ${countDays(globalSpatialRows)}日 / 重複除去 ${duplicateCount}行\n`+
+    `期間 ${formatDateTime(globalSpatialRows[0].ts)} ～ ${formatDateTime(globalSpatialRows.at(-1).ts)}\n`+
+    `共通期間の完全timestamp一致 ${exactCommon}/${commonRows.length} = ${syncRate.toFixed(1)}% / S2作成可能 ${s2Ready}起点\n`+
+    `補助地点gap ${gaps}箇所 / 最大間隔 ${maxGap.toFixed(0)}分 / 最新時刻差 ${latestAge.toFixed(0)}分\n`+
+    `station不一致を含むファイル ${mixedFiles.length}個 / 採用0行ファイル ${wrongFiles.length}個\n`+
+    `結合方針：神戸は予報起点と完全同時刻のみ。未来行・carry-forwardは使用しません。`;
+
+  $("spatialStatus").textContent=
+    `神戸読込完了：${stagedSpatialFiles.length}過去TSV${currentIncluded?" + 今日入力":""}\n`+
+    `完全同期 ${syncRate.toFixed(1)}% / Spatial実験を実行できます。`;
+
+  return {targetStation,expected,syncRate,s2Ready,exact};
+}
+
+function trainSpatialHoldoutForHorizon(steps){
+  const samples=buildSpatialCommonSamples(steps);
+  if(samples.length<120) return {ok:false,error:"共通sample不足"};
+
+  const splitIndex=Math.floor(samples.length*.8);
+  const testStartTs=samples[splitIndex]?.ts;
+  if(!Number.isFinite(testStartTs)) return {ok:false,error:"検証区間を作れません"};
+
+  let trainCount=0;
+  while(trainCount<samples.length && samples[trainCount].targetTs<testStartTs) trainCount++;
+  const test=samples.filter(s=>s.ts>=testStartTs);
+  if(trainCount<80||test.length<20) return {ok:false,error:"train/test不足"};
+
+  const st=createSpatialStats();
+  let trainStats=null;
+  for(let i=0;i<samples.length;i++){
+    addSpatialStat(st,samples[i]);
+    if(i+1===trainCount) trainStats=cloneSpatialStats(st);
+  }
+  if(!trainStats) return {ok:false,error:"train統計作成失敗"};
+
+  const metrics={};
+  const models={};
+  for(const v of SPATIAL_VARIANTS){
+    const p=spatialVariantP(v.id);
+    const evalModel=spatialModelFromStats(trainStats,p,0.8);
+    const finalModel=spatialModelFromStats(st,p,0.8);
+    let ae=0,bias=0;
+    for(const s of test){
+      const pred=s.currentTemp+predictSpatialModel(evalModel,s.xSpatial.slice(0,p));
+      const e=pred-s.targetTemp;
+      ae+=Math.abs(e);bias+=e;
+    }
+    metrics[v.id]={
+      mae:ae/test.length,
+      bias:bias/test.length
+    };
+    models[v.id]=finalModel;
+  }
+
+  const bestId=SPATIAL_VARIANTS.reduce(
+    (best,v)=>metrics[v.id].mae<metrics[best].mae?v.id:best,"S0"
+  );
+
+  const targetStation=globalRows.at(-1).station;
+  const ctx=stationContextCache.get(targetStation);
+  const origin=ctx.rows.at(-1);
+  const base=makeFeature(origin,ctx.map);
+  const extra=spatialExtraAt(origin.ts,"S2");
+  const latestPred={S0:NaN,S1:NaN,S2:NaN};
+  if(base&&extra){
+    const full=[...base,...extra];
+    for(const v of SPATIAL_VARIANTS){
+      const pp=spatialVariantP(v.id);
+      latestPred[v.id]=origin.temperature+predictSpatialModel(models[v.id],full.slice(0,pp));
+    }
+  }
+
+  return {
+    ok:true,steps,
+    sampleCount:samples.length,
+    trainCount,testCount:test.length,
+    metrics,bestId,latestPred,
+    s2Improvement:metrics.S0.mae>0?(metrics.S0.mae-metrics.S2.mae)/metrics.S0.mae*100:NaN
+  };
+}
+
+async function runSpatialAblation(){
+  if(spatialAblationRunning){
+    $("spatialStatus").textContent="Spatial A/Bは計算中です。";
+    return;
+  }
+  spatialAblationRunning=true;
+  $("runSpatialAblation").disabled=true;
+  const started=performance.now();
+
+  try{
+    await loadSpatialData();
+    spatialHoldoutResults=[];
+    $("spatialStatus").textContent="Spatial固定holdoutを計算中...";
+
+    for(let i=0;i<DISPLAY_HORIZONS.length;i++){
+      const h=DISPLAY_HORIZONS[i];
+      const r=trainSpatialHoldoutForHorizon(h.steps);
+      spatialHoldoutResults.push({horizon:h,...r});
+      $("spatialStatus").textContent=`Spatial固定holdout計算中... ${h.label} (${i+1}/8)`;
+      await nextFrame();
+    }
+    renderSpatialHoldout();
+
+    const sec=(performance.now()-started)/1000;
+    $("spatialStatus").textContent=
+      `Spatial固定holdout完了：S0/S1/S2 × 代表8 horizon / ${sec.toFixed(2)}秒\n`+
+      `65特徴量十分統計を1回作り、51/59/65次元を切り出して比較。同一sample・同一splitです。`;
+  }catch(e){
+    $("spatialStatus").textContent="Spatial A/Bエラー\n"+e.message;
+  }finally{
+    spatialAblationRunning=false;
+    $("runSpatialAblation").disabled=false;
+  }
+}
+
+function renderSpatialHoldout(){
+  const body=$("spatialHoldoutBody");
+  body.innerHTML="";
+  if(!spatialHoldoutResults.length){
+    body.innerHTML='<tr><td colspan="12">未実行</td></tr>';
+    return;
+  }
+  for(const r of spatialHoldoutResults){
+    const tr=document.createElement("tr");
+    if(!r.ok){
+      tr.innerHTML=`<td>${r.horizon.label}</td><td colspan="11">${escapeHtml(r.error||"不可")}</td>`;
+    }else{
+      const fmt=x=>Number.isFinite(x)?`${x.toFixed(3)} ℃`:"-";
+      tr.innerHTML=
+        `<td>${r.horizon.label}</td>`+
+        `<td>${r.sampleCount}</td><td>${r.trainCount}</td><td>${r.testCount}</td>`+
+        `<td>${r.metrics.S0.mae.toFixed(3)} ℃</td>`+
+        `<td>${r.metrics.S1.mae.toFixed(3)} ℃</td>`+
+        `<td>${r.metrics.S2.mae.toFixed(3)} ℃</td>`+
+        `<td><b>${r.bestId}</b></td>`+
+        `<td class="${r.s2Improvement>0?"goodText":r.s2Improvement<0?"badText":""}">${r.s2Improvement.toFixed(1)} %</td>`+
+        `<td>${fmt(r.latestPred.S0)}</td><td>${fmt(r.latestPred.S1)}</td><td>${fmt(r.latestPred.S2)}</td>`;
+    }
+    body.appendChild(tr);
+  }
+}
+
+async function runSpatialWalkForward(){
+  if(spatialWalkForwardRunning){
+    $("spatialStatus").textContent="Spatial walk-forwardは計算中です。";
+    return;
+  }
+  spatialWalkForwardRunning=true;
+  $("runSpatialWalkForward").disabled=true;
+  const started=performance.now();
+
+  try{
+    await loadSpatialData();
+    spatialWalkForwardResults=[];
+    const targetStation=globalRows.at(-1).station;
+    const ctx=stationContextCache?.get(targetStation);
+    if(!ctx) throw new Error("主地点contextがありません。");
+    const rows=ctx.rows,map=ctx.map;
+    const firstTs=rows[0].ts,latestTs=rows.at(-1).ts;
+    const allowedHours=new Set([0,6,12,18]);
+
+    for(let hi=0;hi<DISPLAY_HORIZONS.length;hi++){
+      const h=DISPLAY_HORIZONS[hi];
+      $("spatialStatus").textContent=`Spatial 4起点WF中... ${h.label} (${hi+1}/8)`;
+      await nextFrame();
+
+      const samples=buildSpatialCommonSamples(h.steps).sort((a,b)=>a.targetTs-b.targetTs);
+      const origins=rows.filter(r=>{
+        const d=new Date(r.ts);
+        return d.getMinutes()===0 &&
+          allowedHours.has(d.getHours()) &&
+          r.ts-firstTs>=7*86400000 &&
+          r.ts+h.minutes*60000<=latestTs &&
+          !!map.get(r.ts+h.minutes*60000) &&
+          !!makeFeature(r,map) &&
+          !!spatialExtraAt(r.ts,"S2");
+      });
+
+      const st=createSpatialStats();
+      let ptr=0;
+      const cases=[];
+
+      for(const origin of origins){
+        while(ptr<samples.length && samples[ptr].targetTs<=origin.ts){
+          addSpatialStat(st,samples[ptr]);
+          ptr++;
+        }
+        if(st.n<300) continue;
+
+        const target=map.get(origin.ts+h.minutes*60000);
+        const base=makeFeature(origin,map);
+        const extra=spatialExtraAt(origin.ts,"S2");
+        if(!target||!base||!extra) continue;
+        const full=[...base,...extra];
+
+        const pred={},abs={},err={};
+        for(const v of SPATIAL_VARIANTS){
+          const pp=spatialVariantP(v.id);
+          const model=spatialModelFromStats(st,pp,0.8);
+          const yhat=origin.temperature+predictSpatialModel(model,full.slice(0,pp));
+          pred[v.id]=yhat;
+          err[v.id]=yhat-target.temperature;
+          abs[v.id]=Math.abs(err[v.id]);
+        }
+        cases.push({
+          originTs:origin.ts,
+          originHour:new Date(origin.ts).getHours(),
+          day:makeOriginDateKey(origin.ts),
+          actual:target.temperature,pred,abs,err,trainCount:st.n
+        });
+      }
+
+      if(!cases.length){
+        spatialWalkForwardResults.push({horizon:h,ok:false,error:"ケース不足"});
+        continue;
+      }
+
+      const stats={};
+      const dayGroups=new Map();
+      for(const c of cases){
+        if(!dayGroups.has(c.day)) dayGroups.set(c.day,[]);
+        dayGroups.get(c.day).push(c);
+      }
+
+      for(const v of SPATIAL_VARIANTS){
+        const mae=cases.reduce((a,c)=>a+c.abs[v.id],0)/cases.length;
+        const bias=cases.reduce((a,c)=>a+c.err[v.id],0)/cases.length;
+        let dw=0,dt=0;
+        if(v.id!=="S0"){
+          for(const dc of dayGroups.values()){
+            const m0=dc.reduce((a,c)=>a+c.abs.S0,0)/dc.length;
+            const mv=dc.reduce((a,c)=>a+c.abs[v.id],0)/dc.length;
+            if(mv<m0) dw++;
+            else if(Math.abs(mv-m0)<1e-12) dt++;
+          }
+        }
+        stats[v.id]={
+          mae,bias,
+          dayWinRate:v.id==="S0"?NaN:(dw+.5*dt)/dayGroups.size*100
+        };
+      }
+
+      const bestId=SPATIAL_VARIANTS.reduce(
+        (best,v)=>stats[v.id].mae<stats[best].mae?v.id:best,"S0"
+      );
+
+      const byOrigin={S1:{},S2:{}};
+      for(const id of ["S1","S2"]){
+        for(const hour of [0,6,12,18]){
+          const a=cases.filter(c=>c.originHour===hour);
+          if(!a.length){byOrigin[id][hour]=NaN;continue;}
+          const m0=a.reduce((z,c)=>z+c.abs.S0,0)/a.length;
+          const mv=a.reduce((z,c)=>z+c.abs[id],0)/a.length;
+          byOrigin[id][hour]=mv-m0;
+        }
+      }
+
+      spatialWalkForwardResults.push({
+        horizon:h,ok:true,cases,
+        caseCount:cases.length,dayCount:dayGroups.size,
+        stats,bestId,byOrigin,
+        impS1:stats.S0.mae>0?(stats.S0.mae-stats.S1.mae)/stats.S0.mae*100:NaN,
+        impS2:stats.S0.mae>0?(stats.S0.mae-stats.S2.mae)/stats.S0.mae*100:NaN
+      });
+    }
+
+    renderSpatialWalkForward();
+    const sec=(performance.now()-started)/1000;
+    $("spatialStatus").textContent=
+      `Spatial 4起点walk-forward完了：S0/S1/S2 / ${sec.toFixed(2)}秒\n`+
+      `起点 00/06/12/18。各foldはその時点までに確定した共通sampleだけを使用。`;
+  }catch(e){
+    $("spatialStatus").textContent="Spatial walk-forwardエラー\n"+e.message;
+  }finally{
+    spatialWalkForwardRunning=false;
+    $("runSpatialWalkForward").disabled=false;
+  }
+}
+
+function renderSpatialWalkForward(){
+  const body=$("spatialWalkForwardBody");
+  const obody=$("spatialOriginBody");
+  body.innerHTML="";obody.innerHTML="";
+
+  if(!spatialWalkForwardResults.length){
+    body.innerHTML='<tr><td colspan="11">未実行</td></tr>';
+    obody.innerHTML='<tr><td colspan="6">未実行</td></tr>';
+    return;
+  }
+
+  for(const r of spatialWalkForwardResults){
+    if(!r.ok){
+      const tr=document.createElement("tr");
+      tr.innerHTML=`<td>${r.horizon.label}</td><td colspan="10">${escapeHtml(r.error||"不可")}</td>`;
+      body.appendChild(tr);
+      continue;
+    }
+
+    const tr=document.createElement("tr");
+    tr.innerHTML=
+      `<td>${r.horizon.label}</td><td>${r.caseCount}</td><td>${r.dayCount}</td>`+
+      `<td>${r.stats.S0.mae.toFixed(3)} ℃</td>`+
+      `<td>${r.stats.S1.mae.toFixed(3)} ℃</td>`+
+      `<td>${r.stats.S2.mae.toFixed(3)} ℃</td>`+
+      `<td><b>${r.bestId}</b></td>`+
+      `<td class="${r.impS1>0?"goodText":r.impS1<0?"badText":""}">${r.impS1.toFixed(1)} %</td>`+
+      `<td class="${r.impS2>0?"goodText":r.impS2<0?"badText":""}">${r.impS2.toFixed(1)} %</td>`+
+      `<td>${r.stats.S1.dayWinRate.toFixed(1)} %</td>`+
+      `<td>${r.stats.S2.dayWinRate.toFixed(1)} %</td>`;
+    body.appendChild(tr);
+
+    for(const id of ["S1","S2"]){
+      const o=document.createElement("tr");
+      const f=h=>Number.isFinite(r.byOrigin[id][h])?`${formatSigned(r.byOrigin[id][h])} ℃`:"-";
+      o.innerHTML=
+        `<td>${r.horizon.label}</td><td>${id}</td>`+
+        `<td>${f(0)}</td><td>${f(6)}</td><td>${f(12)}</td><td>${f(18)}</td>`;
+      obody.appendChild(o);
+    }
+  }
+}
 
 function variantFeatureNames(variantId){
   const v=AUX_VARIANTS.find(x=>x.id===variantId) || AUX_VARIANTS[0];
