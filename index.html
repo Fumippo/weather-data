@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Weather Forecast Lab v8.6 Spatial-2</title>
+<title>Weather Forecast Lab v8.6.1 Spatial-2</title>
 <style>
 :root{
   --bg:#0b1020;
@@ -138,7 +138,7 @@ th{position:sticky;top:0;background:#172239;color:#c9d5e8}
 <div class="wrap">
   <div class="hero">
     <div>
-      <h1>Weather Forecast Lab <span style="font-size:.38em;color:var(--muted)">v8.6 Spatial-2</span></h1>
+      <h1>Weather Forecast Lab <span style="font-size:.38em;color:var(--muted)">v8.6.1 Spatial-2</span></h1>
       <p>10分値を主軸に、1時間補助観測を時間リークなしで結合し、ΔTモデルを比較検証するブラウザ完結型ダッシュボード</p>
     </div>
     <div class="badge">v8.6 / v8.5 exact高速化 + 神戸Spatial-2 A/B + 降水診断</div>
@@ -859,7 +859,7 @@ const AUX_FEATURE_NAMES = {
 };
 
 
-// v8.6 Spatial-2：主地点（大阪）を神戸10分観測で補強する実験。
+// v8.6.1 Spatial-2：主地点（大阪）を神戸10分観測で補強する実験。
 // S0/S1/S2は必ずS2まで揃う同一sample cohortで比較する。
 const SPATIAL_VARIANTS = [
   {id:"S0",label:"S0 大阪51",extra:0},
@@ -944,7 +944,7 @@ let multiForecastRunning = false;
 let auxWalkForwardRunning = false;
 let auxAblationRunning = false;
 
-// v8.6 Spatial-2 state
+// v8.6.1 Spatial-2 state
 let stagedSpatialFiles = [];
 let currentSpatialRows = [];
 let currentSpatialTsv = "";
@@ -1000,20 +1000,35 @@ $("hourlyAvailabilityVerified").addEventListener("change", () => {
     "今日入力のavailability確認状態が変更されました。1時間値を再変換してください。";
 });
 
-$("historyFiles").addEventListener("change", e => {
-  stagedFiles = uniqueFiles([...stagedFiles, ...e.target.files]);
-  renderFileList();
+$("historyFiles").addEventListener("change", async e => {
+  try{
+    const snapshots=await snapshotSelectedFiles([...e.target.files]);
+    stagedFiles=uniqueFiles([...stagedFiles,...snapshots]);
+    renderFileList();
+    $("runStatus").textContent=`${snapshots.length}ファイルを読み込み済みです。統合・学習を実行できます。`;
+  }catch(err){
+    $("runStatus").textContent="ファイル読込エラー\n"+(err?.message||err);
+  }finally{
+    // 同じファイルを再選択できるようにし、picker側の参照も保持しない。
+    e.target.value="";
+  }
 });
 
 $("drop").addEventListener("dragover", e => {
   e.preventDefault(); $("drop").classList.add("drag");
 });
 $("drop").addEventListener("dragleave", () => $("drop").classList.remove("drag"));
-$("drop").addEventListener("drop", e => {
+$("drop").addEventListener("drop", async e => {
   e.preventDefault(); $("drop").classList.remove("drag");
-  const files = [...e.dataTransfer.files].filter(f => /\.(tsv|txt)$/i.test(f.name));
-  stagedFiles = uniqueFiles([...stagedFiles, ...files]);
-  renderFileList();
+  try{
+    const files=[...e.dataTransfer.files].filter(f=>/\.(tsv|txt)$/i.test(f.name));
+    const snapshots=await snapshotSelectedFiles(files);
+    stagedFiles=uniqueFiles([...stagedFiles,...snapshots]);
+    renderFileList();
+    $("runStatus").textContent=`${snapshots.length}ファイルを読み込み済みです。統合・学習を実行できます。`;
+  }catch(err){
+    $("runStatus").textContent="ファイル読込エラー\n"+(err?.message||err);
+  }
 });
 
 $("clearFiles").addEventListener("click", () => {
@@ -1074,20 +1089,34 @@ $("downloadCurrent").addEventListener("click", () => {
 });
 
 
-$("hourlyHistoryFiles").addEventListener("change", e => {
-  stagedHourlyFiles = uniqueFiles([...stagedHourlyFiles, ...e.target.files]);
-  renderHourlyFileList();
+$("hourlyHistoryFiles").addEventListener("change", async e => {
+  try{
+    const snapshots=await snapshotSelectedFiles([...e.target.files]);
+    stagedHourlyFiles=uniqueFiles([...stagedHourlyFiles,...snapshots]);
+    renderHourlyFileList();
+    $("hourlyDiagnosticSummary").textContent=`1時間TSVを${snapshots.length}ファイル読み込み済みです。`;
+  }catch(err){
+    $("hourlyDiagnosticSummary").textContent="1時間TSV読込エラー\n"+(err?.message||err);
+  }finally{
+    e.target.value="";
+  }
 });
 
 $("hourlyDrop").addEventListener("dragover", e => {
   e.preventDefault(); $("hourlyDrop").classList.add("drag");
 });
 $("hourlyDrop").addEventListener("dragleave", () => $("hourlyDrop").classList.remove("drag"));
-$("hourlyDrop").addEventListener("drop", e => {
+$("hourlyDrop").addEventListener("drop", async e => {
   e.preventDefault(); $("hourlyDrop").classList.remove("drag");
-  const files=[...e.dataTransfer.files].filter(f=>/\.(tsv|txt)$/i.test(f.name));
-  stagedHourlyFiles=uniqueFiles([...stagedHourlyFiles,...files]);
-  renderHourlyFileList();
+  try{
+    const files=[...e.dataTransfer.files].filter(f=>/\.(tsv|txt)$/i.test(f.name));
+    const snapshots=await snapshotSelectedFiles(files);
+    stagedHourlyFiles=uniqueFiles([...stagedHourlyFiles,...snapshots]);
+    renderHourlyFileList();
+    $("hourlyDiagnosticSummary").textContent=`1時間TSVを${snapshots.length}ファイル読み込み済みです。`;
+  }catch(err){
+    $("hourlyDiagnosticSummary").textContent="1時間TSV読込エラー\n"+(err?.message||err);
+  }
 });
 
 $("hourlyClearFiles").addEventListener("click", () => {
@@ -1161,22 +1190,34 @@ $("hourlyDownloadCurrent").addEventListener("click", () => {
 });
 
 
-$("spatialHistoryFiles").addEventListener("change", e => {
-  stagedSpatialFiles=uniqueFiles([...stagedSpatialFiles,...e.target.files]);
-  renderSpatialFileList();
-  invalidateSpatialResults("神戸ファイルが変更されました。Spatial比較を再実行してください。");
+$("spatialHistoryFiles").addEventListener("change", async e => {
+  try{
+    const snapshots=await snapshotSelectedFiles([...e.target.files]);
+    stagedSpatialFiles=uniqueFiles([...stagedSpatialFiles,...snapshots]);
+    renderSpatialFileList();
+    invalidateSpatialResults("神戸ファイルを読み込み済みです。Spatial比較を再実行してください。");
+  }catch(err){
+    $("spatialStatus").textContent="神戸TSV読込エラー\n"+(err?.message||err);
+  }finally{
+    e.target.value="";
+  }
 });
 
 $("spatialDrop").addEventListener("dragover", e => {
   e.preventDefault(); $("spatialDrop").classList.add("drag");
 });
 $("spatialDrop").addEventListener("dragleave", () => $("spatialDrop").classList.remove("drag"));
-$("spatialDrop").addEventListener("drop", e => {
+$("spatialDrop").addEventListener("drop", async e => {
   e.preventDefault(); $("spatialDrop").classList.remove("drag");
-  const files=[...e.dataTransfer.files].filter(f=>/\.(tsv|txt)$/i.test(f.name));
-  stagedSpatialFiles=uniqueFiles([...stagedSpatialFiles,...files]);
-  renderSpatialFileList();
-  invalidateSpatialResults("神戸ファイルが変更されました。Spatial比較を再実行してください。");
+  try{
+    const files=[...e.dataTransfer.files].filter(f=>/\.(tsv|txt)$/i.test(f.name));
+    const snapshots=await snapshotSelectedFiles(files);
+    stagedSpatialFiles=uniqueFiles([...stagedSpatialFiles,...snapshots]);
+    renderSpatialFileList();
+    invalidateSpatialResults("神戸ファイルを読み込み済みです。Spatial比較を再実行してください。");
+  }catch(err){
+    $("spatialStatus").textContent="神戸TSV読込エラー\n"+(err?.message||err);
+  }
 });
 
 $("spatialClearFiles").addEventListener("click", () => {
@@ -1287,6 +1328,37 @@ function setToday(){
   const v=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
   $("date").value=v;
   if($("spatialDate")) $("spatialDate").value=v;
+}
+
+
+async function snapshotSelectedFiles(files){
+  const out=[];
+  for(const f of files){
+    // iOS / iPadOS の Files プロバイダでは、後から File.text() を呼ぶと
+    // 過去の picker で選んだ File 参照が失効して NotFoundError になる場合がある。
+    // 選択直後に本文をメモリへコピーし、以後は File オブジェクトへ依存しない。
+    let content;
+    try{
+      content=await f.text();
+    }catch(err){
+      throw new Error(`${f.name}: ${err?.message||err}`);
+    }
+    out.push({
+      name:f.name,
+      size:f.size,
+      lastModified:f.lastModified,
+      type:f.type||"",
+      content
+    });
+  }
+  return out;
+}
+
+async function stagedFileText(file){
+  if(typeof file?.content==="string") return file.content;
+  // 旧状態との互換用fallback。通常は snapshotSelectedFiles 済み。
+  if(file && typeof file.text==="function") return await file.text();
+  throw new Error(`ファイル本文を読み込めません: ${file?.name||"(不明)"}`);
 }
 
 function uniqueFiles(files){
@@ -2253,7 +2325,7 @@ async function runAll(){
 
       // ---- 10分値 ----
       for(const file of stagedFiles){
-        const text=await file.text();
+        const text=await stagedFileText(file);
 
         const diag=inspectTsvSource(file.name,text);
         sourceDiagnostics.push(diag);
@@ -2303,7 +2375,7 @@ async function runAll(){
       hourlyDiagnostics=[];
 
       for(const file of stagedHourlyFiles){
-        const text=await file.text();
+        const text=await stagedFileText(file);
         const diag=inspectHourlySource(file.name,text);
         hourlyDiagnostics.push(diag);
 
@@ -3630,7 +3702,7 @@ function trainRidgeClosedFormLegacy(samples,lambda){
 
 
 
-// ---------------- v8.6 Spatial-2: 大阪 + 神戸 ----------------
+// ---------------- v8.6.1 Spatial-2: 大阪 + 神戸 ----------------
 
 function spatialVariantP(id){
   const v=SPATIAL_VARIANTS.find(x=>x.id===id) || SPATIAL_VARIANTS[0];
@@ -3797,7 +3869,7 @@ async function loadSpatialData(){
   spatialDiagnostics=[];
 
   for(const file of stagedSpatialFiles){
-    const t=await file.text();
+    const t=await stagedFileText(file);
     const d=inspectTsvSource(file.name,t);
     const rows=parseTsvRows(
       t,
